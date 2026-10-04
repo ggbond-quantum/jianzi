@@ -8,10 +8,12 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
+from PySide6.QtCore import QPointF, Qt
 from PySide6.QtWidgets import QApplication
 
 from jianzipu.core.library import JianziLibrary, create_custom_db
-from jianzipu.gui.app import ComponentBrowserWindow, MainWindow
+from jianzipu.core.synthesis import Placement, place_components
+from jianzipu.gui.app import ComponentBrowserWindow, MainWindow, to_painter_path
 from test_library import make_fixture_db
 
 
@@ -102,3 +104,17 @@ def test_component_browser_reports_conflict(tmp_path, qapp):
         assert result.existing.input_text == "〇甲"
     finally:
         window.close()
+
+
+def test_to_painter_path_fills_double_traced_contours(qapp):
+    """同向重复走线（实测：三/七/九/十 的轮廓被原样走两遍）必须填充，不得空心。
+
+    源数据中这些轮廓前后半段完全相同，在 even-odd 填充规则下会互相抵消而空心；
+    字体本身按非零环绕规则渲染（编译层另有去重），因此预览须与之一致。
+    """
+    double_traced = "M 0 0 L 60 0 L 30 60 Z M 0 0 L 60 0 L 30 60 Z"
+    paths = place_components([Placement(1, 0, 0, 100, 100)], {1: double_traced})
+    qpath = to_painter_path(paths, 350)
+
+    assert qpath.fillRule() == Qt.FillRule.WindingFill
+    assert qpath.contains(QPointF(30, 30))  # 三角形内部

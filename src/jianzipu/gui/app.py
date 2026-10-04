@@ -50,9 +50,15 @@ DB_FILTER = "SQLite 数据库 (*.sqlite *.jdb);;所有文件 (*)"
 
 
 def to_painter_path(paths: list, size: int) -> QPainterPath:
-    """svgpathtools 的 Path 列表 → QPainterPath（350 网格等比映射到 size×size）。"""
+    """svgpathtools 的 Path 列表 → QPainterPath（350 网格等比映射到 size×size）。
+
+    用非零环绕填充（而非 Qt 默认的 even-odd）：源数据中部分构件（三/七/九/十）
+    的闭合轮廓被原样走两遍，even-odd 下会互相抵消而渲染成空心；字体按非零环绕
+    规则渲染（编译层另有轮廓去重），此处与之一致才能所见即所得。
+    """
     scale = size / GRID
     result = QPainterPath()
+    result.setFillRule(Qt.FillRule.WindingFill)
     for path in paths:
         segments = list(path)
         if not segments:

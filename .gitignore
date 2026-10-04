@@ -6,4 +6,5 @@ styles/
 dist/
 
 *.pyc
+*.sqlite
 __pycache__/
