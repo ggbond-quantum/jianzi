@@ -16,3 +16,14 @@ def canonical_char(ch: str) -> str:
 def equivalence_key(text: str) -> str:
     """编码的等价键：逐字取规范形式后拼接；键相同即视为等价的减字编码。"""
     return "".join(canonical_char(ch) for ch in text)
+
+
+def simplified_char(ch: str) -> str:
+    """字的简体形式；无法单字转换时保持原字。"""
+    simplified = zh_convert(ch, "zh-hans")
+    return simplified if len(simplified) == 1 else ch
+
+
+def to_simplified(text: str) -> str:
+    """逐条转换为简体形式（自定义库不变量，ADR 0006）。"""
+    return "".join(simplified_char(ch) for ch in text)

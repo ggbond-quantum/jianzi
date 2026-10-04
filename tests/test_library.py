@@ -10,9 +10,17 @@ fixture 为合成风格库（与风格库同 schema，含简繁混合编码）�
 import sqlite3
 from pathlib import Path
 
-from jianzipu.core.library import JianziLibrary
+import pytest
+from zhconv import convert as zh_convert
+
+from jianzipu.core.library import CreateResult, JianziLibrary, create_custom_db
 from jianzipu.core.synthesis import Placement
 from jianzipu.extract.build import SCHEMA
+
+
+def is_simplified(text: str) -> bool:
+    """库内不变量：每字满足 zh-hans(ch) == ch（无法单字转换者原样保留，视为满足）。"""
+    return all(zh_convert(ch, "zh-hans") == ch for ch in text)
 
 
 def make_fixture_db(path: Path) -> Path:
@@ -107,3 +115,65 @@ def test_find_is_whole_string_not_substring(tmp_path):
         assert lib.find("不存在") == []
     finally:
         lib.close()
+
+
+def test_create_custom_db_from_style_converts_all_to_simplified(tmp_path):
+    source = make_fixture_db(tmp_path / "style.sqlite")
+    dest = tmp_path / "custom.sqlite"
+    result = create_custom_db(dest, source=source)
+    assert result.copied == 4
+    assert result.converted == 2  # 上七九應合散勾五 → 上七九应合散勾五；大換七 → 大换七
+    assert result.conflicts == 0
+
+    lib = JianziLibrary.load(dest)
+    try:
+        entries = lib.entries()
+        assert [e.input_text for e in entries] == [
+            "上七九应合散勾五",
+            "大换七",
+            "大七",
+            "大七六就挑四",
+        ]
+        assert entries[0].title == "长锁"
+        assert entries[0].source_author == "云霄客"
+        assert entries[0].source_id == 1
+        # node 表随主键同步：位置参数在新的简体编码下可读
+        assert lib.placements("上七九应合散勾五") == [
+            Placement(1, 30, 1, 138, 145),
+            Placement(2, 169, 1, 162, 130),
+        ]
+        # 部件轮廓整体复制，自定义库自包含
+        assert lib.components()[1] == "M 0 0 L 100 0 L 100 100 Z"
+    finally:
+        lib.close()
+
+
+def test_create_custom_db_invariant_all_simplified(tmp_path):
+    """验收不变量：任意来源创建的自定义库中，所有 InputText 均为简体形式。"""
+    source = make_fixture_db(tmp_path / "style.sqlite")
+    dest = tmp_path / "custom.sqlite"
+    create_custom_db(dest, source=source)
+    lib = JianziLibrary.load(dest)
+    try:
+        assert lib.entries()
+        assert all(is_simplified(e.input_text) for e in lib.entries())
+    finally:
+        lib.close()
+
+
+def test_create_empty_custom_db(tmp_path):
+    dest = tmp_path / "custom.sqlite"
+    assert create_custom_db(dest) == CreateResult(0, 0, 0)
+    lib = JianziLibrary.load(dest)
+    try:
+        assert lib.entries() == []
+        assert lib.components() == {}
+    finally:
+        lib.close()
+
+
+def test_create_custom_db_refuses_existing_dest(tmp_path):
+    dest = tmp_path / "custom.sqlite"
+    dest.write_bytes(b"")
+    with pytest.raises(FileExistsError):
+        create_custom_db(dest)

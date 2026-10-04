@@ -3,35 +3,10 @@ import sqlite3
 import warnings
 from pathlib import Path
 
+from jianzipu.core.schema import SCHEMA
 from jianzipu.extract.emf import extract_component_paths
 
 CJK_INPUT_RE = re.compile(r"^[一-鿿]{1,10}$")
-
-SCHEMA = """
-CREATE TABLE jianzi (
-    InputText    TEXT PRIMARY KEY,
-    Title        TEXT,
-    SourceAuthor TEXT,
-    SourceID     INTEGER
-);
-CREATE TABLE node (
-    InputText  TEXT REFERENCES jianzi(InputText),
-    Seq        INTEGER,
-    StrokeID   INTEGER,
-    DistX      INTEGER,
-    DistY      INTEGER,
-    DistWidth  INTEGER,
-    DistHeight INTEGER,
-    PRIMARY KEY (InputText, Seq)
-);
-CREATE TABLE component (
-    StrokeID  INTEGER PRIMARY KEY,
-    Title     TEXT,
-    PathData  TEXT,
-    OrgWidth  INTEGER,
-    OrgHeight INTEGER
-);
-"""
 
 
 def build_style_db(source_db: Path, stk_dir: Path, author: str, out_path: Path) -> None:
