@@ -20,8 +20,11 @@ from jianzipu.core.library import (
     create_component_entry,
     create_custom_db,
     default_component_code,
+    delete_entry,
     fill_missing_components,
     pick_entry,
+    rename_entry,
+    save_custom_db_as,
 )
 from jianzipu.core.synthesis import Placement, place_components
 from jianzipu.extract.build import SCHEMA
@@ -264,6 +267,127 @@ def test_pick_entry_unknown_source_text_raises(tmp_path):
     create_custom_db(custom)
     with pytest.raises(ValueError):
         pick_entry(custom, style, "来源中不存在的编码")
+
+
+def test_pick_entry_with_custom_target_code(tmp_path):
+    """挑选入库时可用自定义编码：取来源的字体版本，存为指定的 InputText。"""
+    style = make_fixture_db(tmp_path / "style.sqlite")
+    custom = tmp_path / "custom.sqlite"
+    create_custom_db(custom)
+
+    result = pick_entry(custom, style, "大換七", target_text="我的挑换")
+
+    assert result.status == "inserted"
+    assert result.normalized_text == "我的挑换"
+    lib = JianziLibrary.load(custom)
+    try:
+        assert [e.input_text for e in lib.entries()] == ["我的挑换"]
+        # 位置参数取自来源条目「大換七」（构件 1、2）
+        assert lib.placements("我的挑换") == [
+            Placement(1, 30, 1, 138, 145),
+            Placement(2, 169, 1, 162, 130),
+        ]
+    finally:
+        lib.close()
+
+
+def test_pick_entry_target_code_is_normalized(tmp_path):
+    """自定义编码同样执行简体转换（库不变量）。"""
+    style = make_fixture_db(tmp_path / "style.sqlite")
+    custom = tmp_path / "custom.sqlite"
+    create_custom_db(custom)
+
+    result = pick_entry(custom, style, "大換七", target_text="大換七選")
+    assert result.normalized_text == "大换七选"
+
+
+def test_rename_entry_updates_key_and_nodes(tmp_path):
+    """重命名条目：主键改写并级联更新 node 表，位置参数保持不变。"""
+    style = make_fixture_db(tmp_path / "style.sqlite")
+    custom = tmp_path / "custom.sqlite"
+    create_custom_db(custom)
+    pick_entry(custom, style, "大換七")  # 入库为「大换七」
+
+    result = rename_entry(custom, "大换七", "挑换")
+
+    assert result.status == "inserted"
+    assert result.normalized_text == "挑换"
+    lib = JianziLibrary.load(custom)
+    try:
+        assert [e.input_text for e in lib.entries()] == ["挑换"]
+        assert lib.placements("挑换") == [
+            Placement(1, 30, 1, 138, 145),
+            Placement(2, 169, 1, 162, 130),
+        ]
+        assert lib.placements("大换七") == []
+    finally:
+        lib.close()
+
+
+def test_rename_entry_rejects_duplicate_target(tmp_path):
+    style = make_fixture_db(tmp_path / "style.sqlite")
+    custom = tmp_path / "custom.sqlite"
+    create_custom_db(custom)
+    pick_entry(custom, style, "大換七")
+    pick_entry(custom, style, "大七")
+
+    result = rename_entry(custom, "大换七", "大七")
+
+    assert result.status == "conflict"
+    assert result.existing.input_text == "大七"
+    lib = JianziLibrary.load(custom)
+    try:
+        assert sorted(e.input_text for e in lib.entries()) == ["大七", "大换七"]
+    finally:
+        lib.close()
+
+
+def test_rename_entry_unknown_text_raises(tmp_path):
+    custom = tmp_path / "custom.sqlite"
+    create_custom_db(custom)
+    with pytest.raises(ValueError):
+        rename_entry(custom, "不存在", "新名")
+
+
+def test_delete_entry_removes_entry_and_nodes(tmp_path):
+    """删除条目：jianzi 与 node 一并清除，不留残行。"""
+    style = make_fixture_db(tmp_path / "style.sqlite")
+    custom = tmp_path / "custom.sqlite"
+    create_custom_db(custom)
+    pick_entry(custom, style, "大換七")
+    pick_entry(custom, style, "大七")
+
+    assert delete_entry(custom, "大换七") is True
+    assert delete_entry(custom, "大换七") is False  # 已不存在
+
+    lib = JianziLibrary.load(custom)
+    try:
+        assert [e.input_text for e in lib.entries()] == ["大七"]
+        assert lib.placements("大换七") == []
+    finally:
+        lib.close()
+    conn = sqlite3.connect(custom)
+    assert conn.execute("SELECT COUNT(*) FROM node WHERE InputText = '大换七'").fetchone()[0] == 0
+    conn.close()
+
+
+def test_save_custom_db_as_copies_file(tmp_path):
+    """另存为：目标文件是当前库的完整副本（含构件轮廓），原库不受影响。"""
+    style = make_fixture_db(tmp_path / "style.sqlite")
+    source = tmp_path / "custom.sqlite"
+    create_custom_db(source)
+    pick_entry(source, style, "大換七")
+    dest = tmp_path / "copy.sqlite"
+
+    save_custom_db_as(source, dest)
+
+    assert dest.exists()
+    lib = JianziLibrary.load(dest)
+    try:
+        assert [e.input_text for e in lib.entries()] == ["大换七"]
+        assert set(lib.components()) >= {1, 2}
+    finally:
+        lib.close()
 
 
 def test_pick_entry_copies_component_outlines(tmp_path):

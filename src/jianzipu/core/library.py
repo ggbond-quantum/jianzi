@@ -278,23 +278,29 @@ def create_component_entry(
     return PickResult(status="inserted", normalized_text=normalized)
 
 
-def pick_entry(custom_path: Path, source_path: Path, input_text: str) -> PickResult:
+def pick_entry(
+    custom_path: Path,
+    source_path: Path,
+    source_text: str,
+    target_text: str | None = None,
+) -> PickResult:
     """把一个风格库中的减字挑入自定义库：逐条转简体后写入。
 
-    编码（简体形式）已存在时返回冲突与已存在条目，由调用方提示"编辑/查看"，
-    不覆盖、不写入。
+    source_text 是来源库中的编码；target_text 是写进自定义库的编码，
+    省略时用来源编码的简体形式（可用自定义编码，两个来源的同名减字即可共存）。
+    目标编码已存在时返回冲突与已存在条目，由调用方提示"编辑/查看"，不覆盖、不写入。
     """
     style = JianziLibrary.load(source_path)
     try:
-        source_entry = next((e for e in style.entries() if e.input_text == input_text), None)
+        source_entry = next((e for e in style.entries() if e.input_text == source_text), None)
         if source_entry is None:
-            raise ValueError(f"来源库中不存在编码「{input_text}」")
-        placements = style.placements(input_text)
+            raise ValueError(f"来源库中不存在编码「{source_text}」")
+        placements = style.placements(source_text)
         components = style.component_entries(p.stroke_id for p in placements)
     finally:
         style.close()
 
-    normalized = to_simplified(input_text)
+    normalized = to_simplified(target_text or source_text)
     conn = sqlite3.connect(custom_path)
     try:
         row = conn.execute(
@@ -325,3 +331,61 @@ def pick_entry(custom_path: Path, source_path: Path, input_text: str) -> PickRes
     finally:
         conn.close()
     return PickResult(status="inserted", normalized_text=normalized)
+
+
+def rename_entry(custom_path: Path, old_text: str, new_text: str) -> PickResult:
+    """重命名自定义库中的条目：主键改写并级联更新 node 表。
+
+    新编码同样执行简体转换（库不变量）；与既有条目撞键时返回冲突，不做改动。
+    """
+    normalized = to_simplified(new_text)
+    conn = sqlite3.connect(custom_path)
+    try:
+        if not conn.execute("SELECT 1 FROM jianzi WHERE InputText = ?", (old_text,)).fetchone():
+            raise ValueError(f"库中不存在编码「{old_text}」")
+        if normalized == old_text:
+            return PickResult(status="inserted", normalized_text=normalized)
+        row = conn.execute(
+            "SELECT Title, SourceAuthor, SourceID FROM jianzi WHERE InputText = ?",
+            (normalized,),
+        ).fetchone()
+        if row:
+            return PickResult(
+                status="conflict",
+                normalized_text=normalized,
+                existing=JianziEntry(normalized, row[0] or "", row[1] or "", row[2]),
+            )
+        conn.execute("UPDATE jianzi SET InputText = ? WHERE InputText = ?", (normalized, old_text))
+        conn.execute("UPDATE node SET InputText = ? WHERE InputText = ?", (normalized, old_text))
+        conn.commit()
+    finally:
+        conn.close()
+    return PickResult(status="inserted", normalized_text=normalized)
+
+
+def delete_entry(custom_path: Path, input_text: str) -> bool:
+    """从自定义库删除一个条目（连同其 node 行），返回是否确实删除了内容。"""
+    conn = sqlite3.connect(custom_path)
+    try:
+        cursor = conn.execute("DELETE FROM jianzi WHERE InputText = ?", (input_text,))
+        conn.execute("DELETE FROM node WHERE InputText = ?", (input_text,))
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def save_custom_db_as(source_path: Path, dest_path: Path) -> Path:
+    """把自定义库整体另存到新路径（备份/分发），当前库继续可用。"""
+    source_path, dest_path = Path(source_path), Path(dest_path)
+    if source_path.resolve() == dest_path.resolve():
+        raise ValueError("目标路径与当前库相同")
+    src = sqlite3.connect(f"file:{source_path}?mode=ro", uri=True)
+    dst = sqlite3.connect(dest_path)
+    try:
+        src.backup(dst)
+        dst.commit()
+    finally:
+        dst.close()
+        src.close()
+    return dest_path
