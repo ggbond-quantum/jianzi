@@ -36,6 +36,7 @@ def make_fixture_db(path: Path) -> Path:
             ("大七", "t", "测试作者", 2),
             ("大七六就挑四", "t", "测试作者", 3),
             ("泛", "t", "测试作者", 4),
+            ("大換七", "t", "测试作者", 5),
         ],
     )
     conn.executemany(
@@ -48,6 +49,7 @@ def make_fixture_db(path: Path) -> Path:
             ("大七六就挑四", 1, 1, 10, 1, 100, 100),
             ("大七六就挑四", 2, 2, 200, 1, 100, 100),
             ("泛", 1, 3, 20, 20, 100, 100),
+            ("大換七", 1, 1, 30, 1, 138, 145),
         ],
     )
     conn.commit()
@@ -122,7 +124,15 @@ def test_duplicate_contours_deduped(built):
     assert len(glyph.coordinates) == 3
 
 
+def test_simplified_input_matches_traditional_codes(built):
+    font = TTFont(built.ttf_path)
+    gid = font.getGlyphID(f"uni{built.mapping['大換七']:04X}")
+    assert shape(built.ttf_path, "大換七") == [(gid, 1000)]
+    assert shape(built.ttf_path, "大换七") == [(gid, 1000)]
+
+
 def test_build_result_stats(built):
-    assert built.jianzi_count == 4
-    assert built.ligature_count == 3
-    assert built.blank_count == 8
+    assert built.jianzi_count == 5
+    assert built.ligature_count == 4
+    assert built.blank_count == 9
+    assert built.alias_count == 1

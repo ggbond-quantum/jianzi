@@ -84,6 +84,7 @@ source = { editable = "." }
 dependencies = [
     { name = "fonttools" },
     { name = "svgpathtools" },
+    { name = "zhconv" },
 ]
 
 [package.dev-dependencies]
@@ -97,6 +98,7 @@ dev = [
 requires-dist = [
     { name = "fonttools", specifier = ">=4.50" },
     { name = "svgpathtools", specifier = ">=1.6" },
+    { name = "zhconv", specifier = ">=1.4.3" },
 ]
 
 [package.metadata.requires-dev]
@@ -403,3 +405,9 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/e9/ef/3771dd31c0984baa46295fe0744073f1a28d07548e0cc7863d8745f8b1c4/uharfbuzz-0.56.2-cp310-abi3-win32.whl", hash = "sha256:879457ff2ba12e3c24fca1a3664575000a339e7080e1488e70ae06b8aee2effb", size = 1141396, upload-time = "2026-09-21T11:29:59.614Z" },
     { url = "https://files.pythonhosted.org/packages/09/34/7f05bf99dc91e60174721c6ce7efd03ec1dec4f7064717d217f1a57cc3e3/uharfbuzz-0.56.2-cp310-abi3-win_amd64.whl", hash = "sha256:49450c32c32d7ea5e0a36211c08dc4b8c5b76460ec09532a8c77baa297c98792", size = 1486421, upload-time = "2026-09-21T11:30:01.072Z" },
 ]
+
+[[package]]
+name = "zhconv"
+version = "1.4.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/25/47/c8ae2d5d4025e253211ff3d8c163f457db1da94976cb582337a5ab76cb87/zhconv-1.4.3.tar.gz", hash = "sha256:ad42d9057ca0605f8e41d62b67ca797f879f58193ee6840562c51459b2698c45", size = 211571, upload-time = "2021-10-31T05:59:44.096Z" }

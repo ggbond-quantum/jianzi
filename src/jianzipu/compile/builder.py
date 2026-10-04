@@ -15,6 +15,7 @@ from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.cu2quPen import Cu2QuPen
 from fontTools.pens.t2CharStringPen import T2CharStringPen
 from fontTools.pens.ttGlyphPen import TTGlyphPen
+from zhconv import convert as zh_convert
 
 from jianzipu.core.synthesis import Placement, place_components
 
@@ -39,6 +40,7 @@ class FontBuildResult:
     jianzi_count: int
     ligature_count: int
     blank_count: int
+    alias_count: int
     mapping: dict[str, int]
 
 
@@ -160,6 +162,18 @@ def build_font(db_path: Path, out_dir: Path, formats: tuple[str, ...] = ("ttf", 
     cmap.update({cp: _glyph_name(cp) for cp in mapping.values()})
     cmap.update({ord(c): _glyph_name(ord(c)) for c in used_chars})
 
+    # 简繁等价映射：编码源自繁体数据，为每个繁体字补简体等价码位，指向同一空白字形，
+    # 使用户可用简体输入法（或混输）触发连字。两繁体字映射到同一简体字的罕见冲突时先到先得。
+    used_points = {ord(c) for c in used_chars}
+    alias_count = 0
+    for c in used_chars:
+        simplified = zh_convert(c, "zh-hans")
+        if len(simplified) == 1 and simplified != c:
+            point = ord(simplified)
+            if point not in used_points and point not in cmap:
+                cmap[point] = _glyph_name(ord(c))
+                alias_count += 1
+
     metrics = {".notdef": (NOTDEF_ADVANCE, 0), "space": (SPACE_ADVANCE, 0)}
     metrics.update({_glyph_name(cp): (JIANZI_ADVANCE, 0) for cp in mapping.values()})
     metrics.update({_glyph_name(ord(c)): (BLANK_ADVANCE, 0) for c in used_chars})
@@ -211,6 +225,7 @@ def build_font(db_path: Path, out_dir: Path, formats: tuple[str, ...] = ("ttf", 
         jianzi_count=len(texts),
         ligature_count=len(ligature_rules),
         blank_count=len(used_chars),
+        alias_count=alias_count,
         mapping=mapping,
     )
 
