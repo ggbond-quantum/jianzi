@@ -20,6 +20,7 @@ dev = [
 [project.scripts]
 jianzi-extract = "jianzipu.extract.cli:main"
 jianzi-compile = "jianzipu.compile.cli:main"
+jianzi-gui = "jianzipu.gui.app:main"
 
 [build-system]
 requires = ["hatchling"]
