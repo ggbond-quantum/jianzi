@@ -144,3 +144,57 @@ def _copy_as_simplified(source: Path, out: sqlite3.Connection) -> CreateResult:
         return CreateResult(copied=copied, converted=converted, conflicts=conflicts)
     finally:
         src.close()
+
+
+@dataclass(frozen=True)
+class PickResult:
+    status: str                      # "inserted" | "conflict"
+    normalized_text: str             # 逐条转换后的简体编码（实际写入/判重用的键）
+    existing: JianziEntry | None = None
+
+
+def pick_entry(custom_path: Path, source_path: Path, input_text: str) -> PickResult:
+    """把一个风格库中的减字挑入自定义库：逐条转简体后写入。
+
+    编码（简体形式）已存在时返回冲突与已存在条目，由调用方提示"编辑/查看"，
+    不覆盖、不写入。
+    """
+    style = JianziLibrary.load(source_path)
+    try:
+        source_entry = next((e for e in style.entries() if e.input_text == input_text), None)
+        if source_entry is None:
+            raise ValueError(f"来源库中不存在编码「{input_text}」")
+        placements = style.placements(input_text)
+    finally:
+        style.close()
+
+    normalized = to_simplified(input_text)
+    conn = sqlite3.connect(custom_path)
+    try:
+        row = conn.execute(
+            "SELECT Title, SourceAuthor, SourceID FROM jianzi WHERE InputText = ?",
+            (normalized,),
+        ).fetchone()
+        if row:
+            return PickResult(
+                status="conflict",
+                normalized_text=normalized,
+                existing=JianziEntry(normalized, row[0] or "", row[1] or "", row[2]),
+            )
+        conn.execute(
+            "INSERT INTO jianzi (InputText, Title, SourceAuthor, SourceID)"
+            " VALUES (?, ?, ?, ?)",
+            (normalized, source_entry.title, source_entry.source_author, source_entry.source_id),
+        )
+        conn.executemany(
+            "INSERT INTO node (InputText, Seq, StrokeID, DistX, DistY, DistWidth, DistHeight)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                (normalized, seq, p.stroke_id, p.x, p.y, p.w, p.h)
+                for seq, p in enumerate(placements, start=1)
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return PickResult(status="inserted", normalized_text=normalized)

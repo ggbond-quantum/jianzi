@@ -13,7 +13,12 @@ from pathlib import Path
 import pytest
 from zhconv import convert as zh_convert
 
-from jianzipu.core.library import CreateResult, JianziLibrary, create_custom_db
+from jianzipu.core.library import (
+    CreateResult,
+    JianziLibrary,
+    create_custom_db,
+    pick_entry,
+)
 from jianzipu.core.synthesis import Placement
 from jianzipu.extract.build import SCHEMA
 
@@ -177,3 +182,56 @@ def test_create_custom_db_refuses_existing_dest(tmp_path):
     dest.write_bytes(b"")
     with pytest.raises(FileExistsError):
         create_custom_db(dest)
+
+
+def test_pick_entry_inserts_simplified_copy(tmp_path):
+    style = make_fixture_db(tmp_path / "style.sqlite")
+    custom = tmp_path / "custom.sqlite"
+    create_custom_db(custom)
+
+    result = pick_entry(custom, style, "上七九應合散勾五")
+    assert result.status == "inserted"
+    assert result.normalized_text == "上七九应合散勾五"
+    assert result.existing is None
+
+    lib = JianziLibrary.load(custom)
+    try:
+        entries = lib.entries()
+        assert [e.input_text for e in entries] == ["上七九应合散勾五"]
+        assert entries[0].source_author == "云霄客"
+        assert entries[0].source_id == 1
+        assert lib.placements("上七九应合散勾五") == [
+            Placement(1, 30, 1, 138, 145),
+            Placement(2, 169, 1, 162, 130),
+        ]
+    finally:
+        lib.close()
+
+
+def test_pick_entry_conflict_returns_existing_entry(tmp_path):
+    style = make_fixture_db(tmp_path / "style.sqlite")
+    custom = tmp_path / "custom.sqlite"
+    create_custom_db(custom)
+    pick_entry(custom, style, "上七九應合散勾五")  # 繁体写法，入库为简体
+
+    # 同一来源再挑一次：简体判重命中，返回冲突与已存在条目，不写入
+    result = pick_entry(custom, style, "上七九應合散勾五")
+    assert result.status == "conflict"
+    assert result.normalized_text == "上七九应合散勾五"
+    assert result.existing.input_text == "上七九应合散勾五"
+    assert result.existing.title == "长锁"
+    assert result.existing.source_author == "云霄客"
+
+    lib = JianziLibrary.load(custom)
+    try:
+        assert len(lib.entries()) == 1
+    finally:
+        lib.close()
+
+
+def test_pick_entry_unknown_source_text_raises(tmp_path):
+    style = make_fixture_db(tmp_path / "style.sqlite")
+    custom = tmp_path / "custom.sqlite"
+    create_custom_db(custom)
+    with pytest.raises(ValueError):
+        pick_entry(custom, style, "来源中不存在的编码")
