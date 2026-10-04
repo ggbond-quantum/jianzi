@@ -183,6 +183,20 @@ def test_prefix_char_produces_no_spurious_variant_warning(tmp_path):
     assert not any("U+3007" in m for m in messages), messages
 
 
+def test_font_named_custom_when_library_has_no_author(tmp_path):
+    """自定义库不记录作者：字体名回落到 Custom，不被首个来源作者误导。"""
+    db = make_fixture_db(tmp_path / "fixture.sqlite")
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE jianzi SET SourceAuthor = NULL")
+    conn.commit()
+    conn.close()
+
+    result = build_font(db, tmp_path, formats=("ttf",))
+
+    assert result.author == "Custom"
+    assert result.ttf_path.name == "JianziPu-Custom.ttf"
+
+
 def test_single_char_code_requires_prefix(built):
     """单字编码不自动连字（避免劫持正文）；〇 前缀显式触发。"""
     font = TTFont(built.ttf_path)

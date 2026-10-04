@@ -506,8 +506,8 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "已存在",
-                f"已存在「{result.normalized_text}」：{existing.title}"
-                f"（{existing.source_author}）。\n可在左侧自定义库中右键重命名，或换个编码。",
+                f"已存在「{result.normalized_text}」：{existing.title}。"
+                "\n可在左侧自定义库中右键重命名，或换个编码。",
             )
         self._refresh_custom_list()
         self._refresh_status()

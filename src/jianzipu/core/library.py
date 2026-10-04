@@ -141,7 +141,7 @@ def _copy_as_simplified(source: Path, out: sqlite3.Connection) -> CreateResult:
             src.execute("SELECT StrokeID, Title, PathData, OrgWidth, OrgHeight FROM component"),
         )
         copied = converted = conflicts = 0
-        for input_text, title, author, source_id in src.execute(
+        for input_text, title, _author, source_id in src.execute(
             "SELECT InputText, Title, SourceAuthor, SourceID FROM jianzi ORDER BY SourceID, InputText"
         ):
             normalized = to_simplified(input_text)
@@ -153,10 +153,11 @@ def _copy_as_simplified(source: Path, out: sqlite3.Connection) -> CreateResult:
                 )
             )
             try:
+                # 自定义库不记录作者（只保留来源 ID 以便溯源）
                 out.execute(
                     "INSERT INTO jianzi (InputText, Title, SourceAuthor, SourceID)"
-                    " VALUES (?, ?, ?, ?)",
-                    (normalized, title, author, source_id),
+                    " VALUES (?, ?, NULL, ?)",
+                    (normalized, title, source_id),
                 )
             except sqlite3.IntegrityError:
                 conflicts += 1
@@ -314,10 +315,11 @@ def pick_entry(
                 existing=JianziEntry(normalized, row[0] or "", row[1] or "", row[2]),
             )
         _insert_components(conn, components)
+        # 自定义库不记录作者：它是混合来源的工作库（作者只存在于风格库）
         conn.execute(
             "INSERT INTO jianzi (InputText, Title, SourceAuthor, SourceID)"
-            " VALUES (?, ?, ?, ?)",
-            (normalized, source_entry.title, source_entry.source_author, source_entry.source_id),
+            " VALUES (?, ?, NULL, ?)",
+            (normalized, source_entry.title, source_entry.source_id),
         )
         conn.executemany(
             "INSERT INTO node (InputText, Seq, StrokeID, DistX, DistY, DistWidth, DistHeight)"

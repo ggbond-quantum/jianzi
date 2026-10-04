@@ -172,7 +172,8 @@ def test_create_custom_db_from_style_converts_all_to_simplified(tmp_path):
             "大七六就挑四",
         ]
         assert entries[0].title == "长锁"
-        assert entries[0].source_author == "云霄客"
+        # 自定义库不记录作者：它是混合来源的工作库，作者只存在于风格库
+        assert entries[0].source_author == ""
         assert entries[0].source_id == 1
         # node 表随主键同步：位置参数在新的简体编码下可读
         assert lib.placements("上七九应合散勾五") == [
@@ -230,7 +231,7 @@ def test_pick_entry_inserts_simplified_copy(tmp_path):
     try:
         entries = lib.entries()
         assert [e.input_text for e in entries] == ["上七九应合散勾五"]
-        assert entries[0].source_author == "云霄客"
+        assert entries[0].source_author == ""
         assert entries[0].source_id == 1
         assert lib.placements("上七九应合散勾五") == [
             Placement(1, 30, 1, 138, 145),
@@ -252,7 +253,7 @@ def test_pick_entry_conflict_returns_existing_entry(tmp_path):
     assert result.normalized_text == "上七九应合散勾五"
     assert result.existing.input_text == "上七九应合散勾五"
     assert result.existing.title == "长锁"
-    assert result.existing.source_author == "云霄客"
+    assert result.existing.source_author == ""
 
     lib = JianziLibrary.load(custom)
     try:
@@ -267,6 +268,22 @@ def test_pick_entry_unknown_source_text_raises(tmp_path):
     create_custom_db(custom)
     with pytest.raises(ValueError):
         pick_entry(custom, style, "来源中不存在的编码")
+
+
+def test_pick_entry_does_not_record_author(tmp_path):
+    """自定义库是混合来源的工作库，不记录作者（字体命名不再被首个来源误导）。"""
+    style = make_fixture_db(tmp_path / "style.sqlite")
+    custom = tmp_path / "custom.sqlite"
+    create_custom_db(custom)
+
+    pick_entry(custom, style, "大換七")
+
+    lib = JianziLibrary.load(custom)
+    try:
+        assert lib.author == ""
+        assert lib.entries()[0].source_author == ""
+    finally:
+        lib.close()
 
 
 def test_pick_entry_with_custom_target_code(tmp_path):
