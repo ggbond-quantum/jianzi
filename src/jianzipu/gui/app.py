@@ -423,8 +423,15 @@ class MainWindow(QMainWindow):
         entry, _ = self._entries[row]
         for library in self._libraries:
             matches = library.find(entry.input_text)
-            if matches:
-                self._compare_layout.addWidget(VersionColumn(matches[0], library, self._pick))
+            if not matches:
+                continue
+            try:
+                column = VersionColumn(matches[0], library, self._pick)
+            except KeyError as exc:
+                # 库缺构件轮廓（历史数据或手工 SQL）：降级提示，不影响其余对比
+                column = QLabel(f"{library.author}：缺少构件数据 {exc}，无法预览")
+                column.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._compare_layout.addWidget(column)
 
     def _pick(self, entry: JianziEntry, library: JianziLibrary) -> None:
         if self._custom is None:

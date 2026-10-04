@@ -7,14 +7,35 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import sqlite3
+
 import pytest
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtWidgets import QApplication
 
 from jianzipu.core.library import JianziLibrary, create_custom_db
 from jianzipu.core.synthesis import Placement, place_components
+from jianzipu.extract.build import SCHEMA
 from jianzipu.gui.app import ComponentBrowserWindow, MainWindow, to_painter_path
 from test_library import make_fixture_db
+
+
+def make_incomplete_db(path) -> "os.PathLike":
+    """构造缺构件轮廓的库：条目引用了 component 表中不存在的 StrokeID。"""
+    conn = sqlite3.connect(path)
+    conn.executescript(SCHEMA)
+    conn.execute(
+        "INSERT INTO jianzi (InputText, Title, SourceAuthor, SourceID) VALUES (?, ?, ?, ?)",
+        ("大七", "缺构件", "某作者", 1),
+    )
+    conn.execute(
+        "INSERT INTO node (InputText, Seq, StrokeID, DistX, DistY, DistWidth, DistHeight)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("大七", 1, 403, 0, 0, 100, 100),
+    )
+    conn.commit()
+    conn.close()
+    return path
 
 
 @pytest.fixture(scope="module")
@@ -118,3 +139,18 @@ def test_to_painter_path_fills_double_traced_contours(qapp):
 
     assert qpath.fillRule() == Qt.FillRule.WindingFill
     assert qpath.contains(QPointF(30, 30))  # 三角形内部
+
+
+def test_comparison_survives_missing_component_data(tmp_path, qapp):
+    """库缺构件轮廓时（历史数据或手工 SQL）对比应降级提示，不得让异常逃逸。"""
+    broken = make_incomplete_db(tmp_path / "broken.sqlite")
+    window = MainWindow()
+    try:
+        window.load_style_library(broken)
+        window.show()
+        qapp.processEvents()
+        window._show_comparison(0)  # 直接调用：异常会传播到测试，不会被 Qt 吞掉
+        assert window.isVisible()
+        assert not window.grab().isNull()
+    finally:
+        window.close()
