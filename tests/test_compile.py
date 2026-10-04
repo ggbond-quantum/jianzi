@@ -6,6 +6,7 @@ fixture 库为合成数据（非原始库），验证行为：PUA 映射、空�
 
 import json
 import sqlite3
+import sys
 from pathlib import Path
 
 import pytest
@@ -181,3 +182,33 @@ def test_prefix_alone_is_blank(built):
     """单独输入 〇（后面没有单字编码）渲染为空白，不产生字形。"""
     font = TTFont(built.ttf_path)
     assert shape(built.ttf_path, "〇") == [(font.getGlyphID("uni3007"), 0)]
+
+
+def test_os2_vertical_metrics_nonzero(built):
+    """Windows 字体校验要求 OS/2 垂直度量非零；FontBuilder 默认全 0 会导致无法安装。"""
+    for path in (built.ttf_path, built.otf_path):
+        os2 = TTFont(path)["OS/2"]
+        assert os2.usWinAscent > 0 and os2.usWinDescent > 0
+        assert os2.sTypoAscender > 0 and os2.sTypoDescender < 0
+
+
+def test_name_table_contains_unique_id(built):
+    """Windows 字体校验要求 nameID 3（唯一标识）；FontBuilder 不生成它。"""
+    for path in (built.ttf_path, built.otf_path):
+        records = TTFont(path)["name"].names
+        assert any(r.nameID == 3 and r.platformID == 3 for r in records)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="GDI 注册仅 Windows 可用")
+def test_windows_gdi_accepts_built_fonts(built):
+    """真实安装校验：GDI 必须接受构建产物（进程内私有注册，立即移除，不改动系统）。"""
+    import ctypes
+
+    gdi = ctypes.WinDLL("gdi32", use_last_error=True)
+    gdi.AddFontResourceExW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint, ctypes.c_void_p]
+    gdi.AddFontResourceExW.restype = ctypes.c_int
+    gdi.RemoveFontResourceExW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint, ctypes.c_void_p]
+    for path in (built.ttf_path, built.otf_path):
+        added = gdi.AddFontResourceExW(str(path), 0x10, None)  # FR_PRIVATE
+        assert added > 0, f"{path.name} 被 Windows 拒绝，无法安装"
+        gdi.RemoveFontResourceExW(str(path), 0x10, None)

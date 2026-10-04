@@ -16,6 +16,7 @@ from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.cu2quPen import Cu2QuPen
 from fontTools.pens.t2CharStringPen import T2CharStringPen
 from fontTools.pens.ttGlyphPen import TTGlyphPen
+from fontTools.ttLib.tables._n_a_m_e import NameRecord
 from zhconv import convert as zh_convert
 
 from jianzipu.core.scripts import canonical_char
@@ -31,6 +32,11 @@ NOTDEF_ADVANCE = 500
 PUA_START = 0xE000     # Unicode 私有使用区起点
 CU2QU_MAX_ERR = 0.5
 PREFIX_CHAR = "〇"     # U+3007：单字编码的显式触发前缀（自身渲染为空白）
+# 垂直度量：Windows 字体校验要求 OS/2 度量非零，FontBuilder 默认全 0 会导致字体无法安装
+TYPO_ASCENDER = 880
+TYPO_DESCENDER = -120
+WIN_ASCENT = 1000
+WIN_DESCENT = 200
 
 
 @dataclass(frozen=True)
@@ -145,6 +151,42 @@ def _build_fea(
         lines.append(f"    sub {PREFIX_GLYPH_NAME} {char_glyph} by {_glyph_name(codepoint)};")
     lines.append("} liga;")
     return "\n".join(lines) + "\n"
+
+
+def _add_unique_id(font, name_table: dict) -> None:
+    """Windows 字体校验要求 name 表含 nameID 3（唯一标识）；FontBuilder 不生成它。"""
+    record = NameRecord()
+    record.nameID = 3
+    record.platformID, record.platEncID, record.langID = 3, 1, 0x409
+    record.string = f"{name_table['psName']};{name_table['version']}"
+    font["name"].names.append(record)
+
+
+def _setup_os2(fb) -> None:
+    """写入健全的 OS/2：FontBuilder 默认垂直度量为 0，Windows 会因此拒装（HarfBuzz 不检查）。"""
+    fb.setupOS2(
+        sTypoAscender=TYPO_ASCENDER,
+        sTypoDescender=TYPO_DESCENDER,
+        sTypoLineGap=0,
+        usWinAscent=WIN_ASCENT,
+        usWinDescent=WIN_DESCENT,
+        fsSelection=1 << 6,  # REGULAR
+        fsType=0,            # 允许安装与嵌入
+        achVendID="JZPU",
+        yStrikeoutSize=50,
+        yStrikeoutPosition=250,
+        ySubscriptXSize=600,
+        ySubscriptYSize=600,
+        ySubscriptXOffset=0,
+        ySubscriptYOffset=100,
+        ySuperscriptXSize=600,
+        ySuperscriptYSize=600,
+        ySuperscriptXOffset=0,
+        ySuperscriptYOffset=400,
+        sxHeight=500,
+        sCapHeight=700,
+    )
+    fb.font["OS/2"].recalcCodePageRanges(fb.font)
 
 
 def build_font(db_path: Path, out_dir: Path, formats: tuple[str, ...] = ("ttf", "otf")) -> FontBuildResult:
@@ -288,7 +330,8 @@ def _build_ttf(out_dir, author, glyph_order, cmap, metrics, glyph_paths, fea_tex
     fb.setupHorizontalMetrics(metrics)
     fb.setupHorizontalHeader(ascent=1000, descent=0)
     fb.setupNameTable(name_table, mac=False)
-    fb.setupOS2()
+    _add_unique_id(fb.font, name_table)
+    _setup_os2(fb)
     fb.setupPost(keepGlyphNames=True)
     addOpenTypeFeaturesFromString(fb.font, fea_text)
     path = out_dir / f"JianziPu-{author}.ttf"
@@ -316,7 +359,8 @@ def _build_otf(out_dir, author, glyph_order, cmap, metrics, glyph_paths, fea_tex
     fb.setupHorizontalMetrics(metrics)
     fb.setupHorizontalHeader(ascent=1000, descent=0)
     fb.setupNameTable(name_table, mac=False)
-    fb.setupOS2()
+    _add_unique_id(fb.font, name_table)
+    _setup_os2(fb)
     fb.setupPost()
     addOpenTypeFeaturesFromString(fb.font, fea_text)
     path = out_dir / f"JianziPu-{author}.otf"
