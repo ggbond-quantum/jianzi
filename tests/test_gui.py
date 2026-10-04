@@ -11,9 +11,9 @@ import sqlite3
 
 import pytest
 from PySide6.QtCore import QPointF, Qt
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLineEdit, QPushButton
 
-from jianzipu.core.library import JianziLibrary, create_custom_db
+from jianzipu.core.library import JianziLibrary, create_custom_db, pick_entry
 from jianzipu.core.synthesis import Placement, place_components
 from jianzipu.extract.build import SCHEMA
 from jianzipu.gui.app import ComponentBrowserWindow, MainWindow, to_painter_path
@@ -172,5 +172,108 @@ def test_opening_custom_db_fills_missing_components(tmp_path, qapp):
     try:
         assert 1 in lib.components()  # 该库引用的构件已从风格库补齐
         assert place_components(lib.placements("大七"), lib.components())
+    finally:
+        lib.close()
+
+
+def test_custom_sidebar_lists_entries_sorted_by_input_text(tmp_path, qapp):
+    """自定义库边栏：列出已入库条目，按 InputText 排序。"""
+    style = make_fixture_db(tmp_path / "style.sqlite")
+    custom = tmp_path / "custom.sqlite"
+    create_custom_db(custom)
+    pick_entry(custom, style, "大換七")
+    pick_entry(custom, style, "上七九應合散勾五")
+
+    window = MainWindow()
+    try:
+        window.load_style_library(style)
+        window.load_custom_library(custom)
+        texts = [
+            window._custom_list.item(i).data(Qt.ItemDataRole.UserRole)
+            for i in range(window._custom_list.count())
+        ]
+        assert texts == sorted(texts)
+        assert texts == ["上七九应合散勾五", "大换七"]
+    finally:
+        window.close()
+
+
+def test_search_filters_both_sidebars(tmp_path, qapp):
+    """搜索框同时过滤两个边栏（等价匹配）：一眼看出哪些已入库、哪些还能挑。"""
+    style = make_fixture_db(tmp_path / "style.sqlite")
+    custom = tmp_path / "custom.sqlite"
+    create_custom_db(custom)
+    pick_entry(custom, style, "大換七")
+
+    window = MainWindow()
+    try:
+        window.load_style_library(style)
+        window.load_custom_library(custom)
+        assert window._custom_list.count() == 1
+
+        window._search.setText("大换七")  # 简体查询命中库中的「大换七」
+        assert window._custom_list.count() == 1
+        assert window._list.count() == 1
+
+        window._search.setText("不存在的编码")
+        assert window._custom_list.count() == 0
+        assert window._list.count() == 0
+
+        window._search.setText("")
+        assert window._custom_list.count() == 1
+        assert window._list.count() == 4
+    finally:
+        window.close()
+
+
+def test_pick_from_comparison_uses_edited_code(tmp_path, qapp):
+    """对比列的编码可自定义：挑选时按输入框内容入库。"""
+    style = make_fixture_db(tmp_path / "style.sqlite")
+    custom = tmp_path / "custom.sqlite"
+    create_custom_db(custom)
+
+    window = MainWindow()
+    try:
+        window.load_style_library(style)
+        window.load_custom_library(custom)
+        window._list.setCurrentRow(0)  # 触发对比渲染
+        column = window._compare_layout.itemAt(0).widget()
+        column.findChild(QLineEdit).setText("我的减字")
+        column.findChild(QPushButton).click()
+        assert window._custom_list.count() == 1
+        assert window._custom_list.item(0).data(Qt.ItemDataRole.UserRole) == "我的减字"
+    finally:
+        window.close()
+
+    lib = JianziLibrary.load(custom)
+    try:
+        assert [e.input_text for e in lib.entries()] == ["我的减字"]
+    finally:
+        lib.close()
+
+
+def test_save_as_from_style_creates_custom_library(tmp_path, qapp):
+    """未打开自定义库时，另存为可从风格库创建（全量复制 + 批量转简体）。"""
+    style = make_fixture_db(tmp_path / "style.sqlite")
+    dest = tmp_path / "saved.sqlite"
+
+    window = MainWindow()
+    try:
+        window.load_style_library(style)
+        message = window.save_custom_as(dest)
+        assert "另存为" in message
+        assert window._custom_list.count() == 4
+    finally:
+        window.close()
+
+    lib = JianziLibrary.load(dest)
+    try:
+        assert sorted(e.input_text for e in lib.entries()) == [
+            "上七九应合散勾五",
+            "大七",
+            "大七六就挑四",
+            "大换七",
+        ]
+        assert set(lib.components()) >= {1, 2}
     finally:
         lib.close()

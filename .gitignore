@@ -1,7 +1,7 @@
 .raw/
 .superpowers/
 .venv/
-docs/
+adr/
 styles/
 dist/
 

@@ -18,10 +18,13 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QGridLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
+    QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -37,9 +40,12 @@ from jianzipu.core.library import (
     create_component_entry,
     create_custom_db,
     default_component_code,
+    delete_entry,
     fill_missing_components,
     fit_component_placement,
     pick_entry,
+    rename_entry,
+    save_custom_db_as,
 )
 from jianzipu.core.scripts import equivalence_key
 from jianzipu.core.synthesis import place_components
@@ -118,13 +124,13 @@ class JianziPreview(QWidget):
 
 
 class VersionColumn(QWidget):
-    """一个作者版本的对比列：预览 + 信息 + 挑选按钮。"""
+    """一个作者版本的对比列：预览 + 来源信息 + 编码输入 + 挑选按钮。"""
 
     def __init__(
         self,
         entry: JianziEntry,
         library: JianziLibrary,
-        on_pick: Callable[[JianziEntry, JianziLibrary], None],
+        on_pick: Callable[[JianziEntry, JianziLibrary, str], None],
     ):
         super().__init__()
         layout = QVBoxLayout(self)
@@ -136,11 +142,15 @@ class VersionColumn(QWidget):
         )
         title = QLabel(entry.title or "（无标题）")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        code = QLineEdit(entry.input_text)
+        code.setFixedWidth(PREVIEW_SIZE)
+        code.setToolTip("写入自定义库的编码，可自定义（保存时转简体）")
         button = QPushButton("挑选")
-        button.clicked.connect(lambda: on_pick(entry, library))
+        button.clicked.connect(lambda: on_pick(entry, library, code.text().strip()))
         layout.addWidget(header)
         layout.addWidget(preview, alignment=Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
+        layout.addWidget(code)
         layout.addWidget(button)
 
 
@@ -368,6 +378,7 @@ class MainWindow(QMainWindow):
             self._custom.close()
         self._custom = JianziLibrary.load(path)
         self._refresh_status()
+        self._refresh_custom_list()
         self._fill_missing_components()
 
     def _fill_missing_components(self) -> None:
@@ -385,22 +396,27 @@ class MainWindow(QMainWindow):
 
         bar = QHBoxLayout()
         load_style = QPushButton("加载风格库…")
-        new_custom = QPushButton("新建自定义库…")
+        save_custom = QPushButton("保存自定义库…")
         open_custom = QPushButton("打开自定义库…")
         browse_components = QPushButton("浏览基本部件…")
         self._search = QLineEdit()
-        self._search.setPlaceholderText("搜索编码（等价匹配：简繁写法互认）")
+        self._search.setPlaceholderText("搜索风格库编码（等价匹配：简繁写法互认）")
         bar.addWidget(load_style)
-        bar.addWidget(new_custom)
+        bar.addWidget(save_custom)
         bar.addWidget(open_custom)
         bar.addWidget(browse_components)
         bar.addWidget(self._search, 1)
         outer.addLayout(bar)
 
         middle = QHBoxLayout()
-        self._list = QListWidget()
-        self._list.currentRowChanged.connect(self._show_comparison)
-        middle.addWidget(self._list, 2)
+
+        custom_box = QVBoxLayout()
+        custom_box.addWidget(QLabel("自定义库（右键重命名/删除）"))
+        self._custom_list = QListWidget()
+        self._custom_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._custom_list.customContextMenuRequested.connect(self._custom_context_menu)
+        custom_box.addWidget(self._custom_list, 1)
+        middle.addLayout(custom_box, 2)
 
         self._compare_host = QWidget()
         self._compare_layout = QHBoxLayout(self._compare_host)
@@ -408,12 +424,19 @@ class MainWindow(QMainWindow):
         area.setWidgetResizable(True)
         area.setWidget(self._compare_host)
         middle.addWidget(area, 5)
-        outer.addLayout(middle, 1)
 
+        style_box = QVBoxLayout()
+        style_box.addWidget(QLabel("风格库（来源，只读）"))
+        self._list = QListWidget()
+        self._list.currentRowChanged.connect(self._show_comparison)
+        style_box.addWidget(self._list, 1)
+        middle.addLayout(style_box, 2)
+
+        outer.addLayout(middle, 1)
         self.setCentralWidget(central)
 
         load_style.clicked.connect(self._choose_load_style)
-        new_custom.clicked.connect(self._choose_new_custom)
+        save_custom.clicked.connect(self._choose_save_custom)
         open_custom.clicked.connect(self._choose_open_custom)
         browse_components.clicked.connect(self._open_component_browser)
         self._search.textChanged.connect(self._refresh_list)
@@ -430,6 +453,20 @@ class MainWindow(QMainWindow):
                     continue
                 self._entries.append((entry, library))
                 self._list.addItem(f"{entry.input_text}　·　{entry.source_author}")
+        self._refresh_custom_list()
+
+    def _refresh_custom_list(self) -> None:
+        """刷新自定义库边栏（按 InputText 排序，与搜索框联动）。"""
+        query_key = equivalence_key(self._search.text())
+        self._custom_list.clear()
+        if self._custom is None:
+            return
+        for entry in sorted(self._custom.entries(), key=lambda e: e.input_text):
+            if query_key and query_key not in equivalence_key(entry.input_text):
+                continue
+            item = QListWidgetItem(f"{entry.input_text}　·　{entry.title or '（无标题）'}")
+            item.setData(Qt.ItemDataRole.UserRole, entry.input_text)
+            self._custom_list.addItem(item)
 
     def _show_comparison(self, row: int) -> None:
         while self._compare_layout.count():
@@ -452,11 +489,13 @@ class MainWindow(QMainWindow):
                 column.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._compare_layout.addWidget(column)
 
-    def _pick(self, entry: JianziEntry, library: JianziLibrary) -> None:
+    def _pick(self, entry: JianziEntry, library: JianziLibrary, target_text: str) -> None:
         if self._custom is None:
-            QMessageBox.warning(self, "挑选", "请先新建或打开自定义库。")
+            QMessageBox.warning(self, "挑选", "请先打开或保存一个自定义库。")
             return
-        result = pick_entry(self._custom.path, library.path, entry.input_text)
+        result = pick_entry(
+            self._custom.path, library.path, entry.input_text, target_text or None
+        )
         if result.status == "inserted":
             self.statusBar().showMessage(f"已挑入「{result.normalized_text}」", 5000)
         else:
@@ -465,9 +504,45 @@ class MainWindow(QMainWindow):
                 self,
                 "已存在",
                 f"已存在「{result.normalized_text}」：{existing.title}"
-                f"（{existing.source_author}）。\n如需调整，请在自定义库中编辑/查看该条目。",
+                f"（{existing.source_author}）。\n可在左侧自定义库中右键重命名，或换个编码。",
             )
+        self._refresh_custom_list()
         self._refresh_status()
+
+    # ---- 自定义库条目：右键重命名 / 删除 ----
+
+    def _custom_context_menu(self, pos) -> None:
+        item = self._custom_list.itemAt(pos)
+        if item is None or self._custom is None:
+            return
+        text = item.data(Qt.ItemDataRole.UserRole)
+        menu = QMenu(self)
+        rename_action = menu.addAction("重命名…")
+        delete_action = menu.addAction("删除")
+        chosen = menu.exec(self._custom_list.mapToGlobal(pos))
+        if chosen == rename_action:
+            self._rename_custom_entry(text)
+        elif chosen == delete_action:
+            self._delete_custom_entry(text)
+
+    def _rename_custom_entry(self, text: str) -> None:
+        new_text, ok = QInputDialog.getText(self, "重命名", "新编码（保存时转简体）：", text=text)
+        if not ok or not new_text.strip():
+            return
+        result = rename_entry(self._custom.path, text, new_text.strip())
+        if result.status == "conflict":
+            QMessageBox.warning(self, "重命名", f"已存在「{result.normalized_text}」，未改动。")
+        else:
+            self.statusBar().showMessage(f"已重命名为「{result.normalized_text}」", 5000)
+        self._refresh_custom_list()
+
+    def _delete_custom_entry(self, text: str) -> None:
+        answer = QMessageBox.question(self, "删除", f"确定从自定义库删除「{text}」？")
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        if delete_entry(self._custom.path, text):
+            self.statusBar().showMessage(f"已删除「{text}」", 5000)
+        self._refresh_custom_list()
 
     # ---- 文件操作 ----
 
@@ -476,16 +551,35 @@ class MainWindow(QMainWindow):
         if path:
             self.load_style_library(Path(path))
 
-    def _choose_new_custom(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(self, "新建自定义库", "自定义库.sqlite", DB_FILTER)
-        if not path:
+    def save_custom_as(self, dest: Path) -> str:
+        """另存为：已打开自定义库则复制副本；否则从第一个风格库创建（批量转简体）。"""
+        dest = Path(dest)
+        if dest.exists():
+            dest.unlink()
+        if self._custom is not None:
+            save_custom_db_as(self._custom.path, dest)
+            return f"已另存为 {dest}"
+        style = self._libraries[0]
+        result = create_custom_db(dest, source=style.path)
+        self.load_custom_library(dest)
+        return (
+            f"已从「{style.author}」另存为自定义库"
+            f"（{result.copied} 个减字，{result.converted} 条转简体）"
+        )
+
+    def _choose_save_custom(self) -> None:
+        """保存自定义库：已打开则另存副本；未打开但已加载风格库则从该风格库另存。"""
+        if self._custom is None and not self._libraries:
+            QMessageBox.information(
+                self, "保存自定义库", "请先打开一个自定义库，或加载一个风格库以便从其另存。"
+            )
             return
-        try:
-            create_custom_db(Path(path))
-        except FileExistsError as exc:
-            QMessageBox.warning(self, "新建自定义库", str(exc))
-            return
-        self.load_custom_library(Path(path))
+        suggested = (
+            Path(self._custom.path).name if self._custom is not None else "自定义库.sqlite"
+        )
+        path, _ = QFileDialog.getSaveFileName(self, "保存自定义库", suggested, DB_FILTER)
+        if path:
+            self.statusBar().showMessage(self.save_custom_as(Path(path)), 8000)
 
     def _choose_open_custom(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "打开自定义库", "", DB_FILTER)
