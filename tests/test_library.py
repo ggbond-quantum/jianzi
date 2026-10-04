@@ -22,7 +22,7 @@ from jianzipu.core.library import (
     default_component_code,
     pick_entry,
 )
-from jianzipu.core.synthesis import Placement
+from jianzipu.core.synthesis import Placement, place_components
 from jianzipu.extract.build import SCHEMA
 
 
@@ -263,6 +263,26 @@ def test_pick_entry_unknown_source_text_raises(tmp_path):
     create_custom_db(custom)
     with pytest.raises(ValueError):
         pick_entry(custom, style, "来源中不存在的编码")
+
+
+def test_pick_entry_copies_component_outlines(tmp_path):
+    """挑选入库必须把用到的构件轮廓一并写入自定义库（自包含，ADR 0002）。
+
+    否则该条目后续无法合成/编译（构件缺失 → KeyError）。
+    """
+    style = make_fixture_db(tmp_path / "style.sqlite")
+    custom = tmp_path / "custom.sqlite"
+    create_custom_db(custom)  # 空库：component 表为空
+
+    pick_entry(custom, style, "大換七")
+
+    lib = JianziLibrary.load(custom)
+    try:
+        assert set(lib.components()) >= {1, 2}
+        # 端到端：构件齐备，能合成（修复前这里会 KeyError）
+        assert place_components(lib.placements("大换七"), lib.components())
+    finally:
+        lib.close()
 
 
 def test_component_list_reads_metadata(tmp_path):

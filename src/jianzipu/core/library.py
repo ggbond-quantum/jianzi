@@ -91,6 +91,11 @@ class JianziLibrary:
             )
         ]
 
+    def component_entries(self, stroke_ids) -> list[ComponentEntry]:
+        """指定构件的完整信息（用于把构件轮廓复制进自定义库）。"""
+        wanted = set(stroke_ids)
+        return [c for c in self.component_list() if c.stroke_id in wanted]
+
     def find(self, query: str) -> list[JianziEntry]:
         """等价匹配检索：按等价键比较，任意写法都能命中库中已存的另一种写法。"""
         key = equivalence_key(query)
@@ -177,6 +182,18 @@ class PickResult:
     existing: JianziEntry | None = None
 
 
+def _insert_components(conn: sqlite3.Connection, components: list[ComponentEntry]) -> None:
+    """把构件轮廓写入库中（已存在则跳过），保证自定义库自包含。"""
+    conn.executemany(
+        "INSERT OR IGNORE INTO component (StrokeID, Title, PathData, OrgWidth, OrgHeight)"
+        " VALUES (?, ?, ?, ?, ?)",
+        [
+            (c.stroke_id, c.title, c.path_data, c.org_width, c.org_height)
+            for c in components
+        ],
+    )
+
+
 def default_component_code(component: ComponentEntry) -> str:
     """构件的默认编码：转义前缀 〇 + 构件名去掉尾部数字（泛2 → 〇泛、跪指2 → 〇跪指）。"""
     name = _TRAILING_DIGITS.sub("", component.title) or component.title
@@ -214,17 +231,7 @@ def create_component_entry(
                 normalized_text=normalized,
                 existing=JianziEntry(normalized, row[0] or "", row[1] or "", row[2]),
             )
-        conn.execute(
-            "INSERT OR IGNORE INTO component (StrokeID, Title, PathData, OrgWidth, OrgHeight)"
-            " VALUES (?, ?, ?, ?, ?)",
-            (
-                component.stroke_id,
-                component.title,
-                component.path_data,
-                component.org_width,
-                component.org_height,
-            ),
-        )
+        _insert_components(conn, [component])
         conn.execute(
             "INSERT INTO jianzi (InputText, Title, SourceAuthor, SourceID) VALUES (?, ?, NULL, NULL)",
             (normalized, component.title),
@@ -252,6 +259,7 @@ def pick_entry(custom_path: Path, source_path: Path, input_text: str) -> PickRes
         if source_entry is None:
             raise ValueError(f"来源库中不存在编码「{input_text}」")
         placements = style.placements(input_text)
+        components = style.component_entries(p.stroke_id for p in placements)
     finally:
         style.close()
 
@@ -268,6 +276,7 @@ def pick_entry(custom_path: Path, source_path: Path, input_text: str) -> PickRes
                 normalized_text=normalized,
                 existing=JianziEntry(normalized, row[0] or "", row[1] or "", row[2]),
             )
+        _insert_components(conn, components)
         conn.execute(
             "INSERT INTO jianzi (InputText, Title, SourceAuthor, SourceID)"
             " VALUES (?, ?, ?, ?)",
