@@ -19,7 +19,7 @@ from fontTools.pens.ttGlyphPen import TTGlyphPen
 from fontTools.ttLib.tables._n_a_m_e import NameRecord
 from zhconv import convert as zh_convert
 
-from jianzipu.core.scripts import canonical_char
+from jianzipu.core.scripts import PREFIX_CHAR, canonical_char
 from jianzipu.core.synthesis import Placement, place_components
 
 UPEM = 1000
@@ -31,7 +31,6 @@ SPACE_ADVANCE = 500
 NOTDEF_ADVANCE = 500
 PUA_START = 0xE000     # Unicode 私有使用区起点
 CU2QU_MAX_ERR = 0.5
-PREFIX_CHAR = "〇"     # U+3007：单字编码的显式触发前缀（自身渲染为空白）
 # 垂直度量：Windows 字体校验要求 OS/2 度量非零，FontBuilder 默认全 0 会导致字体无法安装
 TYPO_ASCENDER = 880
 TYPO_DESCENDER = -120
@@ -214,6 +213,8 @@ def build_font(db_path: Path, out_dir: Path, formats: tuple[str, ...] = ("ttf", 
     # 也无论用户输入哪种写法（含混输），都能触发同一批连字规则。
     script_variants: dict[str, set[int]] = {}
     for c in used_chars:
+        if c == PREFIX_CHAR:
+            continue  # 转义前缀由专用空白字形承载，不参与脚本变体归并
         canonical = canonical_char(c)
         members = script_variants.setdefault(canonical, set())
         members.add(ord(canonical))

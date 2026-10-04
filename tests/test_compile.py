@@ -7,6 +7,7 @@ fixture 库为合成数据（非原始库），验证行为：PUA 映射、空�
 import json
 import sqlite3
 import sys
+import warnings
 from pathlib import Path
 
 import pytest
@@ -40,6 +41,7 @@ def make_fixture_db(path: Path) -> Path:
             ("大換七", "t", "测试作者", 5),
             ("大头七", "t", "测试作者", 6),
             ("應", "t", "测试作者", 7),
+            ("〇言", "言部件", "测试作者", 8),
         ],
     )
     conn.executemany(
@@ -55,6 +57,7 @@ def make_fixture_db(path: Path) -> Path:
             ("大換七", 1, 1, 30, 1, 138, 145),
             ("大头七", 1, 1, 30, 1, 138, 145),
             ("應", 1, 1, 30, 1, 138, 145),
+            ("〇言", 1, 1, 17, 17, 315, 315),
         ],
     )
     conn.commit()
@@ -151,11 +154,33 @@ def test_script_variants_share_one_blank_glyph(built):
 
 
 def test_build_result_stats(built):
-    assert built.jianzi_count == 7
-    assert built.ligature_count == 5
+    assert built.jianzi_count == 8
+    assert built.ligature_count == 6
     assert built.prefix_count == 2
-    assert built.blank_count == 11
+    assert built.blank_count == 13
     assert built.alias_count == 3
+
+
+def test_entries_with_prefix_char_trigger_and_keep_glyph_order_unique(built):
+    """单构件减字的编码自带转义前缀 〇：正常触发，且不产生重复字形。"""
+    font = TTFont(built.ttf_path)
+    order = font.getGlyphOrder()
+    assert len(order) == len(set(order)), "字形名出现重复"
+    gid = font.getGlyphID(f"uni{built.mapping['〇言']:04X}")
+    assert shape(built.ttf_path, "〇言") == [(gid, 1000)]
+    # 〇 本身仍是空白（单独输入不产生字形）；缀后汉字保持空白（中间态不可见）
+    assert shape(built.ttf_path, "〇") == [(font.getGlyphID("uni3007"), 0)]
+    assert shape(built.ttf_path, "言") == [(font.getGlyphID("uni8A00"), 0)]
+
+
+def test_prefix_char_produces_no_spurious_variant_warning(tmp_path):
+    """转义前缀 〇 不应被当作脚本变体类而触发假告警。"""
+    db = make_fixture_db(tmp_path / "fixture.sqlite")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        build_font(db, tmp_path, formats=("ttf",))
+    messages = [str(w.message) for w in caught]
+    assert not any("U+3007" in m for m in messages), messages
 
 
 def test_single_char_code_requires_prefix(built):
