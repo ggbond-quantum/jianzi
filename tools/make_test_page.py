@@ -7,13 +7,17 @@
 功能：
 1. 全量校验：映射中每条连字编码经 HarfBuzz 塑形必须恰好等于其 PUA 字形
 2. 简繁等价校验：含繁体字的编码，逐字转简体后塑形结果必须与繁体一致
-3. 生成 specimen.png 样张
-4. 生成 测试页.html（字体 base64 内嵌，双击即可在浏览器测试连字，无需安装字体）
+3. 单字前缀校验：〇 + 单字触发减字；单字直打保持空白
+4. 可安装性校验：Windows 的 GDI 必须接受该字体（OS/2 度量为零或缺 nameID 3 会被拒装，见 ADR 0008）
+5. 生成 specimen.png 样张
+6. 生成 测试页.html（字体 base64 内嵌，双击即可在浏览器测试连字，无需安装字体）
 """
 
 import argparse
 import base64
+import ctypes
 import json
+import sys
 from pathlib import Path
 
 import uharfbuzz as hb
@@ -116,7 +120,20 @@ def main() -> None:
     for t, reason in prefix_bad[:5]:
         print(f"   FAIL: {t} -> {reason}")
 
-    # 4. 样张（从库内真实编码中挑选）
+    # 4. 可安装性校验：GDI 私有注册（进程内，立即移除；不改动系统）
+    if sys.platform == "win32":
+        gdi = ctypes.WinDLL("gdi32", use_last_error=True)
+        gdi.AddFontResourceExW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint, ctypes.c_void_p]
+        gdi.AddFontResourceExW.restype = ctypes.c_int
+        gdi.RemoveFontResourceExW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint, ctypes.c_void_p]
+        added = gdi.AddFontResourceExW(str(args.ttf), 0x10, None)
+        if added:
+            gdi.RemoveFontResourceExW(str(args.ttf), 0x10, None)
+        print(f"可安装性校验（GDI）: {'接受' if added else '拒绝'}")
+    else:
+        print("可安装性校验（GDI）: 跳过（非 Windows 平台）")
+
+    # 5. 样张（从库内真实编码中挑选）
     by_len: dict[int, list[str]] = {}
     for t in sorted(multi):
         by_len.setdefault(len(t), []).append(t)
@@ -141,7 +158,7 @@ def main() -> None:
     img.save(args.out_dir / "specimen.png")
     print(f"样张: {args.out_dir / 'specimen.png'}")
 
-    # 4. 测试页（字体内嵌 base64）
+    # 6. 测试页（字体内嵌 base64）
     b64 = base64.b64encode(args.ttf.read_bytes()).decode("ascii")
     example_single = f"〇{singles[0]}" if singles else ""
     single_note = f"（如 {example_single}）" if example_single else ""
