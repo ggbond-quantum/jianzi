@@ -1,0 +1,9 @@
+.raw/
+.superpowers/
+.venv/
+docs/
+styles/
+dist/
+
+*.pyc
+__pycache__/
