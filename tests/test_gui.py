@@ -20,7 +20,7 @@ from jianzipu.gui.app import ComponentBrowserWindow, MainWindow, to_painter_path
 from test_library import make_fixture_db
 
 
-def make_incomplete_db(path) -> "os.PathLike":
+def make_incomplete_db(path, stroke_id: int = 403) -> "os.PathLike":
     """构造缺构件轮廓的库：条目引用了 component 表中不存在的 StrokeID。"""
     conn = sqlite3.connect(path)
     conn.executescript(SCHEMA)
@@ -31,7 +31,7 @@ def make_incomplete_db(path) -> "os.PathLike":
     conn.execute(
         "INSERT INTO node (InputText, Seq, StrokeID, DistX, DistY, DistWidth, DistHeight)"
         " VALUES (?, ?, ?, ?, ?, ?, ?)",
-        ("大七", 1, 403, 0, 0, 100, 100),
+        ("大七", 1, stroke_id, 0, 0, 100, 100),
     )
     conn.commit()
     conn.close()
@@ -154,3 +154,23 @@ def test_comparison_survives_missing_component_data(tmp_path, qapp):
         assert not window.grab().isNull()
     finally:
         window.close()
+
+
+def test_opening_custom_db_fills_missing_components(tmp_path, qapp):
+    """打开自定义库时自动用已加载的风格库补齐缺失构件，使预览/编译可用。"""
+    style = make_fixture_db(tmp_path / "style.sqlite")
+    custom = make_incomplete_db(tmp_path / "custom.sqlite", stroke_id=1)
+
+    window = MainWindow()
+    try:
+        window.load_style_library(style)
+        window.load_custom_library(custom)
+    finally:
+        window.close()
+
+    lib = JianziLibrary.load(custom)
+    try:
+        assert 1 in lib.components()  # 该库引用的构件已从风格库补齐
+        assert place_components(lib.placements("大七"), lib.components())
+    finally:
+        lib.close()

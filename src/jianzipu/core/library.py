@@ -194,6 +194,37 @@ def _insert_components(conn: sqlite3.Connection, components: list[ComponentEntry
     )
 
 
+def fill_missing_components(custom_path: Path, source_path: Path) -> int:
+    """用来源风格库补齐自定义库中缺失的构件轮廓（只补缺、不覆盖），返回补齐数量。
+
+    历史上经挑选入库的条目可能只有 node 而缺 component 行；实测各风格库的
+    component 表内容一致，因此任意一个风格库都能补齐任意自定义库。
+    """
+    conn = sqlite3.connect(custom_path)
+    try:
+        used = {row[0] for row in conn.execute("SELECT DISTINCT StrokeID FROM node")}
+        present = {row[0] for row in conn.execute("SELECT StrokeID FROM component")}
+        missing = used - present
+    finally:
+        conn.close()
+    if not missing:
+        return 0
+
+    source = JianziLibrary.load(source_path)
+    try:
+        components = source.component_entries(missing)
+    finally:
+        source.close()
+
+    conn = sqlite3.connect(custom_path)
+    try:
+        _insert_components(conn, components)
+        conn.commit()
+    finally:
+        conn.close()
+    return len(components)
+
+
 def default_component_code(component: ComponentEntry) -> str:
     """构件的默认编码：转义前缀 〇 + 构件名去掉尾部数字（泛2 → 〇泛、跪指2 → 〇跪指）。"""
     name = _TRAILING_DIGITS.sub("", component.title) or component.title

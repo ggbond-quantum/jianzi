@@ -20,6 +20,7 @@ from jianzipu.core.library import (
     create_component_entry,
     create_custom_db,
     default_component_code,
+    fill_missing_components,
     pick_entry,
 )
 from jianzipu.core.synthesis import Placement, place_components
@@ -281,6 +282,65 @@ def test_pick_entry_copies_component_outlines(tmp_path):
         assert set(lib.components()) >= {1, 2}
         # 端到端：构件齐备，能合成（修复前这里会 KeyError）
         assert place_components(lib.placements("大换七"), lib.components())
+    finally:
+        lib.close()
+
+
+def _make_custom_with_node_only(path, input_text):
+    """模拟修复前挑入的条目：有 jianzi/node，但 component 表为空。"""
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "INSERT INTO jianzi (InputText, Title, SourceAuthor, SourceID) VALUES (?, ?, ?, ?)",
+        (input_text, "无构件", "云霄客", 9),
+    )
+    conn.executemany(
+        "INSERT INTO node (InputText, Seq, StrokeID, DistX, DistY, DistWidth, DistHeight)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [(input_text, 1, 1, 30, 1, 138, 145), (input_text, 2, 2, 169, 1, 162, 130)],
+    )
+    conn.commit()
+    conn.close()
+    return path
+
+
+def test_fill_missing_components_copies_used_outlines(tmp_path):
+    """补齐缺失构件：从风格库把 node 引用但 component 表缺少的轮廓补上，幂等。"""
+    style = make_fixture_db(tmp_path / "style.sqlite")
+    custom = tmp_path / "custom.sqlite"
+    create_custom_db(custom)
+    _make_custom_with_node_only(custom, "大七")
+
+    assert fill_missing_components(custom, style) == 2
+
+    lib = JianziLibrary.load(custom)
+    try:
+        assert set(lib.components()) >= {1, 2}
+        assert place_components(lib.placements("大七"), lib.components())
+    finally:
+        lib.close()
+    assert fill_missing_components(custom, style) == 0  # 幂等
+
+
+def test_fill_missing_components_keeps_existing_outlines(tmp_path):
+    """补齐只补缺、不覆盖：库中已有的构件轮廓（如自定义风格包）保持原样。"""
+    style = make_fixture_db(tmp_path / "style.sqlite")
+    custom = tmp_path / "custom.sqlite"
+    create_custom_db(custom)
+    _make_custom_with_node_only(custom, "大七")
+    conn = sqlite3.connect(custom)
+    conn.execute(
+        "INSERT INTO component (StrokeID, Title, PathData, OrgWidth, OrgHeight)"
+        " VALUES (1, '自定义', 'M 0 0 L 1 1 Z', 10, 10)"
+    )
+    conn.commit()
+    conn.close()
+
+    assert fill_missing_components(custom, style) == 1  # 只补构件 2
+
+    lib = JianziLibrary.load(custom)
+    try:
+        assert lib.components()[1] == "M 0 0 L 1 1 Z"
+        assert lib.components()[2] == "M 200 0 L 300 0 L 300 100 Z"
     finally:
         lib.close()
 

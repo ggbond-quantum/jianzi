@@ -37,6 +37,7 @@ from jianzipu.core.library import (
     create_component_entry,
     create_custom_db,
     default_component_code,
+    fill_missing_components,
     fit_component_placement,
     pick_entry,
 )
@@ -206,13 +207,22 @@ class ComponentBrowserWindow(QMainWindow):
         self._components = self._style.component_list()
         self._refresh_grid()
         self._refresh_status()
+        self._fill_missing_components()
 
     def load_custom_library(self, path: Path) -> None:
-        """打开自定义库作为入库目标。"""
+        """打开自定义库作为入库目标；若已有风格库，顺带补齐缺失的构件轮廓。"""
         if self._custom is not None:
             self._custom.close()
         self._custom = JianziLibrary.load(Path(path))
         self._refresh_status()
+        self._fill_missing_components()
+
+    def _fill_missing_components(self) -> None:
+        if self._custom is None or self._style is None:
+            return
+        filled = fill_missing_components(self._custom.path, self._style.path)
+        if filled:
+            self.statusBar().showMessage(f"已从风格库补齐 {filled} 个构件轮廓", 8000)
 
     def component_count(self) -> int:
         return len(self._components)
@@ -349,14 +359,23 @@ class MainWindow(QMainWindow):
         self._libraries.append(JianziLibrary.load(path))
         self._refresh_list()
         self._refresh_status()
+        self._fill_missing_components()
 
     def load_custom_library(self, path: Path) -> None:
-        """打开一个自定义库作为挑选目标。"""
+        """打开一个自定义库作为挑选目标；若已有风格库，顺带补齐缺失的构件轮廓。"""
         path = Path(path)
         if self._custom is not None:
             self._custom.close()
         self._custom = JianziLibrary.load(path)
         self._refresh_status()
+        self._fill_missing_components()
+
+    def _fill_missing_components(self) -> None:
+        if self._custom is None or not self._libraries:
+            return
+        filled = fill_missing_components(self._custom.path, self._libraries[0].path)
+        if filled:
+            self.statusBar().showMessage(f"已从风格库补齐 {filled} 个构件轮廓", 8000)
 
     # ---- 界面搭建 ----
 
