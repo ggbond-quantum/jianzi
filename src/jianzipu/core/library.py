@@ -183,7 +183,7 @@ def default_component_code(component: ComponentEntry) -> str:
     return f"{PREFIX_CHAR}{name}"
 
 
-def _fit_placement(component: ComponentEntry) -> Placement:
+def fit_component_placement(component: ComponentEntry) -> Placement:
     """按原始比例缩放到字身框（留 FIT_MARGIN 边距）并居中，不拉伸。"""
     content = GRID_SIZE * (1 - 2 * FIT_MARGIN)
     scale = min(content / component.org_width, content / component.org_height)
@@ -201,7 +201,7 @@ def create_component_entry(
     自定义库保持自包含。编码已存在时返回冲突与已存在条目，不覆盖。
     """
     normalized = to_simplified(input_text or default_component_code(component))
-    placement = _fit_placement(component)
+    placement = fit_component_placement(component)
     conn = sqlite3.connect(custom_path)
     try:
         row = conn.execute(
