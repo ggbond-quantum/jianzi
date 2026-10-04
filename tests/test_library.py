@@ -84,3 +84,26 @@ def test_load_library_placements_and_components(tmp_path):
         assert lib.components()[1] == "M 0 0 L 100 0 L 100 100 Z"
     finally:
         lib.close()
+
+
+def test_find_matches_across_scripts(tmp_path):
+    """等价匹配：查询与候选按同一等价键比较，任意写法都能命中另一种写法。"""
+    lib = JianziLibrary.load(make_fixture_db(tmp_path / "style.sqlite"))
+    try:
+        # 库中存繁体写法，简体查询命中
+        assert [e.input_text for e in lib.find("上七九应合散勾五")] == ["上七九應合散勾五"]
+        # 库中写法原样查询命中；繁体查询简体写法同样命中
+        assert [e.input_text for e in lib.find("大換七")] == ["大換七"]
+        assert [e.input_text for e in lib.find("大换七")] == ["大換七"]
+    finally:
+        lib.close()
+
+
+def test_find_is_whole_string_not_substring(tmp_path):
+    lib = JianziLibrary.load(make_fixture_db(tmp_path / "style.sqlite"))
+    try:
+        assert [e.input_text for e in lib.find("大七")] == ["大七"]
+        assert lib.find("大七六") == []
+        assert lib.find("不存在") == []
+    finally:
+        lib.close()

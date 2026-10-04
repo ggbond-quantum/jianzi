@@ -10,6 +10,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
+from jianzipu.core.scripts import equivalence_key
 from jianzipu.core.synthesis import Placement
 
 
@@ -63,3 +64,8 @@ class JianziLibrary:
 
     def components(self) -> dict[int, str]:
         return dict(self._conn.execute("SELECT StrokeID, PathData FROM component"))
+
+    def find(self, query: str) -> list[JianziEntry]:
+        """等价匹配检索：按等价键比较，任意写法都能命中库中已存的另一种写法。"""
+        key = equivalence_key(query)
+        return [e for e in self.entries() if equivalence_key(e.input_text) == key]

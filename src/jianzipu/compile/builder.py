@@ -18,6 +18,7 @@ from fontTools.pens.t2CharStringPen import T2CharStringPen
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 from zhconv import convert as zh_convert
 
+from jianzipu.core.scripts import canonical_char
 from jianzipu.core.synthesis import Placement, place_components
 
 UPEM = 1000
@@ -47,12 +48,6 @@ class FontBuildResult:
 
 def _glyph_name(codepoint: int) -> str:
     return f"uni{codepoint:04X}"
-
-
-def _canonical(ch: str) -> str:
-    """字的规范形式（优先繁体，沿用广陵神器编码）；无法转换时保持原字。"""
-    traditional = zh_convert(ch, "zh-hant")
-    return traditional if len(traditional) == 1 else ch
 
 
 def _to_font_units(x: float, y: float) -> tuple[float, float]:
@@ -133,7 +128,7 @@ def _build_fea(ligature_rules: list[tuple[str, int]]) -> str:
     """按长度降序生成 liga 规则（长序列优先匹配，解决前缀嵌套）。"""
     lines = ["feature liga {"]
     for text, codepoint in sorted(ligature_rules, key=lambda r: (-len(r[0]), r[0])):
-        components = " ".join(_glyph_name(ord(_canonical(ch))) for ch in text)
+        components = " ".join(_glyph_name(ord(canonical_char(ch))) for ch in text)
         lines.append(f"    sub {components} by {_glyph_name(codepoint)};")
     lines.append("} liga;")
     return "\n".join(lines) + "\n"
@@ -164,7 +159,7 @@ def build_font(db_path: Path, out_dir: Path, formats: tuple[str, ...] = ("ttf", 
     # 也无论用户输入哪种写法（含混输），都能触发同一批连字规则。
     script_variants: dict[str, set[int]] = {}
     for c in used_chars:
-        canonical = _canonical(c)
+        canonical = canonical_char(c)
         members = script_variants.setdefault(canonical, set())
         members.add(ord(canonical))
         members.add(ord(c))
@@ -205,7 +200,7 @@ def build_font(db_path: Path, out_dir: Path, formats: tuple[str, ...] = ("ttf", 
     for text in texts:
         if len(text) < 2:
             continue
-        canonical_text = "".join(_canonical(ch) for ch in text)
+        canonical_text = "".join(canonical_char(ch) for ch in text)
         if canonical_text in canonical_seen:
             warnings.warn(f"编码「{text}」与「{canonical_seen[canonical_text]}」简繁等价，字体中只保留后者")
             continue
