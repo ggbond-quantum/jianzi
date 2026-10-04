@@ -252,6 +252,34 @@ def test_pick_from_comparison_uses_edited_code(tmp_path, qapp):
         lib.close()
 
 
+def test_new_empty_custom_library(tmp_path, qapp):
+    """新建空白自定义库：边栏为空，随后可直接挑选入库。"""
+    style = make_fixture_db(tmp_path / "style.sqlite")
+    dest = tmp_path / "blank.sqlite"
+
+    window = MainWindow()
+    try:
+        window.load_style_library(style)
+        window.new_custom_library(dest)
+        assert window._custom is not None
+        assert window._custom_list.count() == 0
+
+        # 空库可直接作为挑选目标
+        window._list.setCurrentRow(0)
+        column = window._compare_layout.itemAt(0).widget()
+        column.findChild(QPushButton).click()
+        assert window._custom_list.count() == 1
+    finally:
+        window.close()
+
+    lib = JianziLibrary.load(dest)
+    try:
+        assert len(lib.entries()) == 1
+        assert set(lib.components())  # 构件轮廓随之入库，库自包含
+    finally:
+        lib.close()
+
+
 def test_save_as_from_style_creates_custom_library(tmp_path, qapp):
     """未打开自定义库时，另存为可从风格库创建（全量复制 + 批量转简体）。"""
     style = make_fixture_db(tmp_path / "style.sqlite")

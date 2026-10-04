@@ -396,12 +396,14 @@ class MainWindow(QMainWindow):
 
         bar = QHBoxLayout()
         load_style = QPushButton("加载风格库…")
+        new_custom = QPushButton("新建自定义库…")
         save_custom = QPushButton("保存自定义库…")
         open_custom = QPushButton("打开自定义库…")
         browse_components = QPushButton("浏览基本部件…")
         self._search = QLineEdit()
-        self._search.setPlaceholderText("搜索风格库编码（等价匹配：简繁写法互认）")
+        self._search.setPlaceholderText("搜索编码（等价匹配：简繁写法互认）")
         bar.addWidget(load_style)
+        bar.addWidget(new_custom)
         bar.addWidget(save_custom)
         bar.addWidget(open_custom)
         bar.addWidget(browse_components)
@@ -436,6 +438,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         load_style.clicked.connect(self._choose_load_style)
+        new_custom.clicked.connect(self._choose_new_custom)
         save_custom.clicked.connect(self._choose_save_custom)
         open_custom.clicked.connect(self._choose_open_custom)
         browse_components.clicked.connect(self._open_component_browser)
@@ -551,6 +554,14 @@ class MainWindow(QMainWindow):
         if path:
             self.load_style_library(Path(path))
 
+    def new_custom_library(self, path: Path) -> None:
+        """新建空白自定义库并作为当前工作库（已存在的文件按对话框确认覆盖）。"""
+        path = Path(path)
+        if path.exists():
+            path.unlink()
+        create_custom_db(path)
+        self.load_custom_library(path)
+
     def save_custom_as(self, dest: Path) -> str:
         """另存为：已打开自定义库则复制副本；否则从第一个风格库创建（批量转简体）。"""
         dest = Path(dest)
@@ -580,6 +591,13 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getSaveFileName(self, "保存自定义库", suggested, DB_FILTER)
         if path:
             self.statusBar().showMessage(self.save_custom_as(Path(path)), 8000)
+
+    def _choose_new_custom(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self, "新建空白自定义库", "自定义库.sqlite", DB_FILTER
+        )
+        if path:
+            self.new_custom_library(Path(path))
 
     def _choose_open_custom(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "打开自定义库", "", DB_FILTER)
