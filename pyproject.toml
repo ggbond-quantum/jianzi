@@ -5,6 +5,7 @@ description = "古琴减字谱字体：数据库驱动的字体编译与预览"
 requires-python = ">=3.12"
 dependencies = [
     "fonttools>=4.50",
+    "pyside6>=6.11.2",
     "svgpathtools>=1.6",
     "zhconv>=1.4.3",
 ]
