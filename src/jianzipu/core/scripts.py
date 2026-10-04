@@ -8,9 +8,16 @@ from zhconv import convert as zh_convert
 
 
 def canonical_char(ch: str) -> str:
-    """字的规范形式（优先繁体，沿用广陵神器编码）；无法转换时保持原字。"""
-    traditional = zh_convert(ch, "zh-hant")
-    return traditional if len(traditional) == 1 else ch
+    """字的规范形式（等价类代表元，优先繁体、沿用广陵神器编码）。
+
+    先取简体再转回繁体：异体写法（如 鎻 / 鎖 / 锁）由此落入同一等价类；
+    任一步无法单字转换时跳过该步，保底返回原字。
+    """
+    simplified = zh_convert(ch, "zh-hans")
+    if len(simplified) != 1:
+        simplified = ch
+    traditional = zh_convert(simplified, "zh-hant")
+    return traditional if len(traditional) == 1 else simplified
 
 
 def equivalence_key(text: str) -> str:

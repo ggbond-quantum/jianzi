@@ -122,6 +122,31 @@ def test_find_is_whole_string_not_substring(tmp_path):
         lib.close()
 
 
+def test_find_matches_variant_forms(tmp_path):
+    """异体写法互为等价（实测数据：云霄客存「鎻」，其他库存「鎖/锁」），检索不漏。"""
+    db = tmp_path / "variant.sqlite"
+    conn = sqlite3.connect(db)
+    conn.executescript(SCHEMA)
+    conn.execute(
+        "INSERT INTO jianzi (InputText, Title, SourceAuthor, SourceID) VALUES (?, ?, ?, ?)",
+        ("撞上鎻", "撞锁", "云霄客", 1),
+    )
+    conn.execute(
+        "INSERT INTO node (InputText, Seq, StrokeID, DistX, DistY, DistWidth, DistHeight)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("撞上鎻", 1, 1, 0, 0, 100, 100),
+    )
+    conn.commit()
+    conn.close()
+
+    lib = JianziLibrary.load(db)
+    try:
+        assert [e.input_text for e in lib.find("撞上锁")] == ["撞上鎻"]
+        assert [e.input_text for e in lib.find("撞上鎖")] == ["撞上鎻"]
+    finally:
+        lib.close()
+
+
 def test_create_custom_db_from_style_converts_all_to_simplified(tmp_path):
     source = make_fixture_db(tmp_path / "style.sqlite")
     dest = tmp_path / "custom.sqlite"
