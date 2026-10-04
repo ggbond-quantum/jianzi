@@ -99,7 +99,24 @@ def main() -> None:
     for t, v in equiv_bad[:5]:
         print(f"   FAIL: {t} -> {v}")
 
-    # 3. 样张（从库内真实编码中挑选）
+    # 3. 单字编码前缀校验：〇 + 单字（含简繁变体）触发减字；单字直打保持空白不被劫持
+    singles = [t for t in mapping if len(t) == 1]
+    prefix_bad: list[tuple[str, str]] = []
+    for t in singles:
+        gid = ttfont.getGlyphID("uni" + mapping[t][2:])
+        for v in (t, convert_text(t, "zh-hans"), convert_text(t, "zh-hant")):
+            if v is None:
+                continue
+            if shape(hbfont, "〇" + v) != [(gid, 1000)]:
+                prefix_bad.append((t, f"〇{v} 未触发"))
+        plain = shape(hbfont, t)
+        if len(plain) != 1 or plain[0][1] != 0:
+            prefix_bad.append((t, "直打未保持空白"))
+    print(f"单字前缀校验: {len(singles)} 个单字编码，失败 {len(prefix_bad)}")
+    for t, reason in prefix_bad[:5]:
+        print(f"   FAIL: {t} -> {reason}")
+
+    # 4. 样张（从库内真实编码中挑选）
     by_len: dict[int, list[str]] = {}
     for t in sorted(multi):
         by_len.setdefault(len(t), []).append(t)
@@ -126,9 +143,12 @@ def main() -> None:
 
     # 4. 测试页（字体内嵌 base64）
     b64 = base64.b64encode(args.ttf.read_bytes()).decode("ascii")
-    default_text = " ".join(samples[:4])
+    example_single = f"〇{singles[0]}" if singles else ""
+    single_note = f"（如 {example_single}）" if example_single else ""
+    default_text = " ".join(samples[:4] + ([example_single] if example_single else []))
     hints = "".join(f"<code>{s}</code>" for s in samples)
-    singles = [t for t in mapping if len(t) == 1]
+    if example_single:
+        hints += f"<code>{example_single}</code>"
     html = f"""<!DOCTYPE html>
 <html lang="zh">
 <head>
@@ -163,7 +183,7 @@ def main() -> None:
 <p class="note">
   输入框输入减字编码，多个减字用空格分隔，连字（liga）生效时会实时替换为减字字形。
   输入过程中汉字不可见属正常现象（基础汉字为空白字形）。<b>简体、繁体输入均可</b>（如 换 与 換 等价），混输亦可。
-  本字体共 {len(mapping)} 个减字（连字 {len(multi)} 个；另有 {len(singles)} 个单字减字无连字，无法直接打出）。
+  本字体共 {len(mapping)} 个减字：{len(multi)} 个多字编码直接连字；{len(singles)} 个单字编码需加 <code>〇</code> 前缀触发{single_note}，单字直打保持空白、不劫持正文。
 </p>
 <input id="input" value="{default_text}" autocomplete="off">
 <div id="preview">{default_text}</div>
