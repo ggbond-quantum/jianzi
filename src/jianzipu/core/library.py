@@ -6,14 +6,18 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
 from jianzipu.core.schema import SCHEMA
-from jianzipu.core.scripts import equivalence_key, to_simplified
-from jianzipu.core.synthesis import Placement
+from jianzipu.core.scripts import PREFIX_CHAR, equivalence_key, to_simplified
+from jianzipu.core.synthesis import GRID_SIZE, Placement
+
+FIT_MARGIN = 0.05  # 单构件入库时的字身框留白比例
+_TRAILING_DIGITS = re.compile(r"\d+$")
 
 
 @dataclass(frozen=True)
@@ -22,6 +26,17 @@ class JianziEntry:
     title: str
     source_author: str
     source_id: int
+
+
+@dataclass(frozen=True)
+class ComponentEntry:
+    """一个基本构件（含轮廓与原始尺寸），用于部件浏览与单构件减字入库。"""
+
+    stroke_id: int
+    title: str
+    path_data: str
+    org_width: int
+    org_height: int
 
 
 class JianziLibrary:
@@ -66,6 +81,15 @@ class JianziLibrary:
 
     def components(self) -> dict[int, str]:
         return dict(self._conn.execute("SELECT StrokeID, PathData FROM component"))
+
+    def component_list(self) -> list[ComponentEntry]:
+        """全部构件（含名称与原始尺寸），按 StrokeID 排序。"""
+        return [
+            ComponentEntry(stroke_id, title or "", path_data or "", org_w, org_h)
+            for stroke_id, title, path_data, org_w, org_h in self._conn.execute(
+                "SELECT StrokeID, Title, PathData, OrgWidth, OrgHeight FROM component ORDER BY StrokeID"
+            )
+        ]
 
     def find(self, query: str) -> list[JianziEntry]:
         """等价匹配检索：按等价键比较，任意写法都能命中库中已存的另一种写法。"""
@@ -151,6 +175,69 @@ class PickResult:
     status: str                      # "inserted" | "conflict"
     normalized_text: str             # 逐条转换后的简体编码（实际写入/判重用的键）
     existing: JianziEntry | None = None
+
+
+def default_component_code(component: ComponentEntry) -> str:
+    """构件的默认编码：转义前缀 〇 + 构件名去掉尾部数字（泛2 → 〇泛、跪指2 → 〇跪指）。"""
+    name = _TRAILING_DIGITS.sub("", component.title) or component.title
+    return f"{PREFIX_CHAR}{name}"
+
+
+def _fit_placement(component: ComponentEntry) -> Placement:
+    """按原始比例缩放到字身框（留 FIT_MARGIN 边距）并居中，不拉伸。"""
+    content = GRID_SIZE * (1 - 2 * FIT_MARGIN)
+    scale = min(content / component.org_width, content / component.org_height)
+    w = round(component.org_width * scale)
+    h = round(component.org_height * scale)
+    return Placement(component.stroke_id, (GRID_SIZE - w) // 2, (GRID_SIZE - h) // 2, w, h)
+
+
+def create_component_entry(
+    custom_path: Path, component: ComponentEntry, input_text: str | None = None
+) -> PickResult:
+    """把一个基本构件写为自定义库中的单构件减字条目（省略记谱法用）。
+
+    编码默认取 `〇` + 构件名（去尾部数字），适配居中摆放；构件轮廓一并入库，
+    自定义库保持自包含。编码已存在时返回冲突与已存在条目，不覆盖。
+    """
+    normalized = to_simplified(input_text or default_component_code(component))
+    placement = _fit_placement(component)
+    conn = sqlite3.connect(custom_path)
+    try:
+        row = conn.execute(
+            "SELECT Title, SourceAuthor, SourceID FROM jianzi WHERE InputText = ?",
+            (normalized,),
+        ).fetchone()
+        if row:
+            return PickResult(
+                status="conflict",
+                normalized_text=normalized,
+                existing=JianziEntry(normalized, row[0] or "", row[1] or "", row[2]),
+            )
+        conn.execute(
+            "INSERT OR IGNORE INTO component (StrokeID, Title, PathData, OrgWidth, OrgHeight)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (
+                component.stroke_id,
+                component.title,
+                component.path_data,
+                component.org_width,
+                component.org_height,
+            ),
+        )
+        conn.execute(
+            "INSERT INTO jianzi (InputText, Title, SourceAuthor, SourceID) VALUES (?, ?, NULL, NULL)",
+            (normalized, component.title),
+        )
+        conn.execute(
+            "INSERT INTO node (InputText, Seq, StrokeID, DistX, DistY, DistWidth, DistHeight)"
+            " VALUES (?, 1, ?, ?, ?, ?, ?)",
+            (normalized, placement.stroke_id, placement.x, placement.y, placement.w, placement.h),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return PickResult(status="inserted", normalized_text=normalized)
 
 
 def pick_entry(custom_path: Path, source_path: Path, input_text: str) -> PickResult:

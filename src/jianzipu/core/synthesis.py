@@ -2,6 +2,8 @@ from dataclasses import dataclass
 
 from svgpathtools import Path, parse_path
 
+GRID_SIZE = 350  # 减字部件摆放网格（350×350，Y 轴向下）
+
 
 @dataclass(frozen=True)
 class Placement:
@@ -43,7 +45,7 @@ def place_components(placements: list[Placement], components: dict[int, str]) ->
     return placed
 
 
-def render_svg(paths: list[Path], grid_size: int = 350) -> str:
+def render_svg(paths: list[Path], grid_size: int = GRID_SIZE) -> str:
     d = " ".join(p.d() for p in paths)
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" '

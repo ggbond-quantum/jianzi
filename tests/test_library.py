@@ -14,9 +14,12 @@ import pytest
 from zhconv import convert as zh_convert
 
 from jianzipu.core.library import (
+    ComponentEntry,
     CreateResult,
     JianziLibrary,
+    create_component_entry,
     create_custom_db,
+    default_component_code,
     pick_entry,
 )
 from jianzipu.core.synthesis import Placement
@@ -260,3 +263,90 @@ def test_pick_entry_unknown_source_text_raises(tmp_path):
     create_custom_db(custom)
     with pytest.raises(ValueError):
         pick_entry(custom, style, "来源中不存在的编码")
+
+
+def test_component_list_reads_metadata(tmp_path):
+    lib = JianziLibrary.load(make_fixture_db(tmp_path / "style.sqlite"))
+    try:
+        comps = lib.component_list()
+        assert [(c.stroke_id, c.title, c.org_width, c.org_height) for c in comps] == [
+            (1, "甲", 100, 100),
+            (2, "乙", 100, 100),
+        ]
+        assert comps[0].path_data == "M 0 0 L 100 0 L 100 100 Z"
+    finally:
+        lib.close()
+
+
+def test_default_component_code_strips_trailing_digits():
+    """默认编码：〇 + 构件名去尾部数字（泛2 → 〇泛、跪指2 → 〇跪指）。"""
+    assert default_component_code(ComponentEntry(322, "蠲2", "", 10, 10)) == "〇蠲"
+    assert default_component_code(ComponentEntry(305, "勾", "", 10, 10)) == "〇勾"
+
+
+def test_create_component_entry_fits_and_centers(tmp_path):
+    """构件入库：按原始比例适配居中（5% 边界）写入单构件减字条目。"""
+    custom = tmp_path / "custom.sqlite"
+    create_custom_db(custom)
+    component = ComponentEntry(1, "甲", "M 0 0 L 100 0 L 100 100 Z", 100, 100)
+
+    result = create_component_entry(custom, component, "〇甲")
+    assert result.status == "inserted"
+    assert result.normalized_text == "〇甲"
+
+    lib = JianziLibrary.load(custom)
+    try:
+        entries = lib.entries()
+        assert [e.input_text for e in entries] == ["〇甲"]
+        assert entries[0].title == "甲"
+        # 内容区 350*(1-2*0.05)=315，正方形构件贴合长边 315、居中 (350-315)//2=17
+        assert lib.placements("〇甲") == [Placement(1, 17, 17, 315, 315)]
+        # 构件轮廓一并入库，自定义库自包含
+        assert lib.components()[1] == "M 0 0 L 100 0 L 100 100 Z"
+    finally:
+        lib.close()
+
+
+def test_create_component_entry_keeps_aspect_ratio(tmp_path):
+    """非正方形构件按原始比例缩放，不拉伸。"""
+    custom = tmp_path / "custom.sqlite"
+    create_custom_db(custom)
+    component = ComponentEntry(9, "丁", "M 0 0 L 100 0 L 100 40 Z", 100, 40)
+
+    create_component_entry(custom, component, "〇丁")
+
+    lib = JianziLibrary.load(custom)
+    try:
+        # 长边 315，短边 40/100*315=126
+        assert lib.placements("〇丁") == [Placement(9, 17, 112, 315, 126)]
+    finally:
+        lib.close()
+
+
+def test_create_component_entry_uses_default_code(tmp_path):
+    """不传编码时用默认值：〇 + 构件名去尾部数字。"""
+    custom = tmp_path / "custom.sqlite"
+    create_custom_db(custom)
+    component = ComponentEntry(1, "泛2", "M 0 0 L 100 0 L 100 100 Z", 100, 100)
+
+    result = create_component_entry(custom, component)
+    assert result.normalized_text == "〇泛"
+    assert result.status == "inserted"
+
+
+def test_create_component_entry_conflict_returns_existing(tmp_path):
+    custom = tmp_path / "custom.sqlite"
+    create_custom_db(custom)
+    component = ComponentEntry(1, "甲", "M 0 0 L 100 0 L 100 100 Z", 100, 100)
+    create_component_entry(custom, component, "〇甲")
+
+    result = create_component_entry(custom, component, "〇甲")
+    assert result.status == "conflict"
+    assert result.existing.input_text == "〇甲"
+    assert result.existing.title == "甲"
+
+    lib = JianziLibrary.load(custom)
+    try:
+        assert len(lib.entries()) == 1
+    finally:
+        lib.close()
