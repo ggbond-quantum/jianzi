@@ -21,6 +21,7 @@ def main(argv: list[str] | None = None) -> None:
     print(f"作者: {result.author}")
     print(
         f"减字: {result.jianzi_count}  连字规则: {result.ligature_count}"
+        f"  前缀规则: {result.prefix_count}"
         f"  空白汉字: {result.blank_count}  简繁别名: {result.alias_count}"
     )
     if result.ttf_path:

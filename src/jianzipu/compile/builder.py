@@ -30,6 +30,7 @@ SPACE_ADVANCE = 500
 NOTDEF_ADVANCE = 500
 PUA_START = 0xE000     # Unicode 私有使用区起点
 CU2QU_MAX_ERR = 0.5
+PREFIX_CHAR = "〇"     # U+3007：单字编码的显式触发前缀（自身渲染为空白）
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,7 @@ class FontBuildResult:
     author: str
     jianzi_count: int
     ligature_count: int
+    prefix_count: int
     blank_count: int
     alias_count: int
     mapping: dict[str, int]
@@ -48,6 +50,9 @@ class FontBuildResult:
 
 def _glyph_name(codepoint: int) -> str:
     return f"uni{codepoint:04X}"
+
+
+PREFIX_GLYPH_NAME = _glyph_name(ord(PREFIX_CHAR))
 
 
 def _to_font_units(x: float, y: float) -> tuple[float, float]:
@@ -124,12 +129,20 @@ def _draw_paths(pen, paths) -> None:
         pen.closePath()
 
 
-def _build_fea(ligature_rules: list[tuple[str, int]]) -> str:
-    """按长度降序生成 liga 规则（长序列优先匹配，解决前缀嵌套）。"""
+def _build_fea(
+    ligature_rules: list[tuple[str, int]], prefix_rules: list[tuple[str, int]]
+) -> str:
+    """按长度降序生成 liga 规则（长序列优先匹配，解决前缀嵌套）。
+
+    单字编码生成 〇 前缀规则：〇 只作触发符、被规则消费（如「〇勾」→ 减字「勾」）。
+    """
     lines = ["feature liga {"]
     for text, codepoint in sorted(ligature_rules, key=lambda r: (-len(r[0]), r[0])):
         components = " ".join(_glyph_name(ord(canonical_char(ch))) for ch in text)
         lines.append(f"    sub {components} by {_glyph_name(codepoint)};")
+    for text, codepoint in sorted(prefix_rules, key=lambda r: r[0]):
+        char_glyph = _glyph_name(ord(canonical_char(text)))
+        lines.append(f"    sub {PREFIX_GLYPH_NAME} {char_glyph} by {_glyph_name(codepoint)};")
     lines.append("} liga;")
     return "\n".join(lines) + "\n"
 
@@ -169,11 +182,11 @@ def build_font(db_path: Path, out_dir: Path, formats: tuple[str, ...] = ("ttf", 
 
     blank_names = [_glyph_name(ord(canonical)) for canonical in script_variants]
     glyph_order = (
-        [".notdef", "space"]
+        [".notdef", "space", PREFIX_GLYPH_NAME]
         + [_glyph_name(cp) for cp in mapping.values()]
         + blank_names
     )
-    cmap = {0x20: "space"}
+    cmap = {0x20: "space", ord(PREFIX_CHAR): PREFIX_GLYPH_NAME}
     cmap.update({cp: _glyph_name(cp) for cp in mapping.values()})
     alias_count = 0
     for canonical, members in script_variants.items():
@@ -187,6 +200,7 @@ def build_font(db_path: Path, out_dir: Path, formats: tuple[str, ...] = ("ttf", 
                 alias_count += 1
 
     metrics = {".notdef": (NOTDEF_ADVANCE, 0), "space": (SPACE_ADVANCE, 0)}
+    metrics[PREFIX_GLYPH_NAME] = (BLANK_ADVANCE, 0)
     metrics.update({_glyph_name(cp): (JIANZI_ADVANCE, 0) for cp in mapping.values()})
     metrics.update({_glyph_name(ord(canonical)): (BLANK_ADVANCE, 0) for canonical in script_variants})
 
@@ -194,20 +208,24 @@ def build_font(db_path: Path, out_dir: Path, formats: tuple[str, ...] = ("ttf", 
     # 绘制以字形名为索引（placed 的键是 InputText）
     glyph_paths = {_glyph_name(mapping[text]): paths for text, paths in placed.items()}
 
-    # 连字规则：简繁等价的编码归并后只保留一条（先到先得并告警），其余仍可通过 PUA 码位使用
+    # 连字规则：多字编码直接连字；单字编码不自动连字（避免劫持正文——这些字同时是
+    # 普通中文，且大量作为长编码的前缀），改由 〇 前缀显式触发。
+    # 简繁等价的编码归并后只保留一条（先到先得并告警），其余仍可通过 PUA 码位使用。
     ligature_rules: list[tuple[str, int]] = []
+    prefix_rules: list[tuple[str, int]] = []
     canonical_seen: dict[str, str] = {}
     for text in texts:
-        if len(text) < 2:
-            continue
         canonical_text = "".join(canonical_char(ch) for ch in text)
         if canonical_text in canonical_seen:
             warnings.warn(f"编码「{text}」与「{canonical_seen[canonical_text]}」简繁等价，字体中只保留后者")
             continue
         canonical_seen[canonical_text] = text
-        ligature_rules.append((text, mapping[text]))
+        if len(text) < 2:
+            prefix_rules.append((text, mapping[text]))
+        else:
+            ligature_rules.append((text, mapping[text]))
 
-    fea_text = _build_fea(ligature_rules)
+    fea_text = _build_fea(ligature_rules, prefix_rules)
     family = f"JianziPu {author}"
     name_table = {
         "familyName": family,
@@ -249,6 +267,7 @@ def build_font(db_path: Path, out_dir: Path, formats: tuple[str, ...] = ("ttf", 
         author=author,
         jianzi_count=len(texts),
         ligature_count=len(ligature_rules),
+        prefix_count=len(prefix_rules),
         blank_count=len(used_chars),
         alias_count=alias_count,
         mapping=mapping,

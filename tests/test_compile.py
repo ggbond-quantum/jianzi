@@ -38,6 +38,7 @@ def make_fixture_db(path: Path) -> Path:
             ("泛", "t", "测试作者", 4),
             ("大換七", "t", "测试作者", 5),
             ("大头七", "t", "测试作者", 6),
+            ("應", "t", "测试作者", 7),
         ],
     )
     conn.executemany(
@@ -52,6 +53,7 @@ def make_fixture_db(path: Path) -> Path:
             ("泛", 1, 3, 20, 20, 100, 100),
             ("大換七", 1, 1, 30, 1, 138, 145),
             ("大头七", 1, 1, 30, 1, 138, 145),
+            ("應", 1, 1, 30, 1, 138, 145),
         ],
     )
     conn.commit()
@@ -148,7 +150,34 @@ def test_script_variants_share_one_blank_glyph(built):
 
 
 def test_build_result_stats(built):
-    assert built.jianzi_count == 6
+    assert built.jianzi_count == 7
     assert built.ligature_count == 5
-    assert built.blank_count == 10
-    assert built.alias_count == 2
+    assert built.prefix_count == 2
+    assert built.blank_count == 11
+    assert built.alias_count == 3
+
+
+def test_single_char_code_requires_prefix(built):
+    """单字编码不自动连字（避免劫持正文）；〇 前缀显式触发。"""
+    font = TTFont(built.ttf_path)
+    gid = font.getGlyphID(f"uni{built.mapping['泛']:04X}")
+    assert shape(built.ttf_path, "〇泛") == [(gid, 1000)]
+
+
+def test_single_char_without_prefix_stays_blank(built):
+    blank = TTFont(built.ttf_path).getGlyphID("uni6CDB")  # 泛 的空白字形
+    assert shape(built.ttf_path, "泛") == [(blank, 0)]
+
+
+def test_prefix_accepts_script_variants(built):
+    """〇 后接简体或繁体写法都触发同一减字（cmap 已归并到同一空白字形）。"""
+    font = TTFont(built.ttf_path)
+    gid = font.getGlyphID(f"uni{built.mapping['應']:04X}")
+    assert shape(built.ttf_path, "〇應") == [(gid, 1000)]
+    assert shape(built.ttf_path, "〇应") == [(gid, 1000)]
+
+
+def test_prefix_alone_is_blank(built):
+    """单独输入 〇（后面没有单字编码）渲染为空白，不产生字形。"""
+    font = TTFont(built.ttf_path)
+    assert shape(built.ttf_path, "〇") == [(font.getGlyphID("uni3007"), 0)]
