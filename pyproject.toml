@@ -12,10 +12,12 @@ dependencies = [
 dev = [
     "pillow>=12.3.0",
     "pytest>=8.0",
+    "uharfbuzz>=0.56.2",
 ]
 
 [project.scripts]
 jianzi-extract = "jianzipu.extract.cli:main"
+jianzi-compile = "jianzipu.compile.cli:main"
 
 [build-system]
 requires = ["hatchling"]
