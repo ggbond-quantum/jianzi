@@ -45,10 +45,11 @@ def shape(hbfont, text: str) -> list[tuple[int, int]]:
     return [(i.codepoint, p.x_advance) for i, p in zip(buf.glyph_infos, buf.glyph_positions)]
 
 
-def to_simplified(text: str) -> str | None:
+def convert_text(text: str, target: str) -> str | None:
+    """逐字转换整条编码（zh-hans / zh-hant），任一字符无法单字转换则返回 None。"""
     out = []
     for ch in text:
-        s = zh_convert(ch, "zh-hans")
+        s = zh_convert(ch, target)
         if len(s) != 1:
             return None
         out.append(s)
@@ -75,16 +76,28 @@ def main() -> None:
     for t in bad[:5]:
         print(f"   FAIL: {t}")
 
-    # 2. 简繁等价校验
-    differing = [t for t in multi if (to_simplified(t) or t) != t]
-    equiv_bad = [
-        (t, to_simplified(t))
-        for t in differing
-        if shape(hbfont, to_simplified(t)) != [(ttfont.getGlyphID("uni" + mapping[t][2:]), 1000)]
-    ]
-    print(f"简繁等价校验: {len(differing)} 条含繁体字的编码，失败 {len(equiv_bad)}")
-    for t, s in equiv_bad[:5]:
-        print(f"   FAIL: {t} -> {s}")
+    # 2. 简繁等价校验（双向：简体版、繁体版输入都应触发同一字形）
+    variant_map: dict[str, list[str]] = {}
+    for t in multi:
+        variants = []
+        for target in ("zh-hans", "zh-hant"):
+            v = convert_text(t, target)
+            if v is not None and v != t:
+                variants.append(v)
+        if variants:
+            variant_map[t] = variants
+
+    equiv_bad = []
+    checked = 0
+    for t, variants in variant_map.items():
+        gid = ttfont.getGlyphID("uni" + mapping[t][2:])
+        for v in variants:
+            checked += 1
+            if shape(hbfont, v) != [(gid, 1000)]:
+                equiv_bad.append((t, v))
+    print(f"简繁等价校验（双向）: {checked} 个变体输入，失败 {len(equiv_bad)}")
+    for t, v in equiv_bad[:5]:
+        print(f"   FAIL: {t} -> {v}")
 
     # 3. 样张（从库内真实编码中挑选）
     by_len: dict[int, list[str]] = {}
@@ -93,8 +106,8 @@ def main() -> None:
     samples = ["大九挑七"] if "大九挑七" in mapping else []
     for length in (3, 4, 5, 6):
         samples.extend(by_len.get(length, [])[:2])
-    if differing:
-        samples.append(min(differing, key=len))
+    if variant_map:
+        samples.append(min(variant_map, key=len))
     samples = list(dict.fromkeys(samples))
 
     cols, cell, size, pad = 4, 240, 180, 24

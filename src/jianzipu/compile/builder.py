@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -46,6 +47,12 @@ class FontBuildResult:
 
 def _glyph_name(codepoint: int) -> str:
     return f"uni{codepoint:04X}"
+
+
+def _canonical(ch: str) -> str:
+    """字的规范形式（优先繁体，沿用广陵神器编码）；无法转换时保持原字。"""
+    traditional = zh_convert(ch, "zh-hant")
+    return traditional if len(traditional) == 1 else ch
 
 
 def _to_font_units(x: float, y: float) -> tuple[float, float]:
@@ -126,7 +133,7 @@ def _build_fea(ligature_rules: list[tuple[str, int]]) -> str:
     """按长度降序生成 liga 规则（长序列优先匹配，解决前缀嵌套）。"""
     lines = ["feature liga {"]
     for text, codepoint in sorted(ligature_rules, key=lambda r: (-len(r[0]), r[0])):
-        components = " ".join(_glyph_name(ord(ch)) for ch in text)
+        components = " ".join(_glyph_name(ord(_canonical(ch))) for ch in text)
         lines.append(f"    sub {components} by {_glyph_name(codepoint)};")
     lines.append("} liga;")
     return "\n".join(lines) + "\n"
@@ -151,36 +158,59 @@ def build_font(db_path: Path, out_dir: Path, formats: tuple[str, ...] = ("ttf", 
 
     mapping = {text: PUA_START + i for i, text in enumerate(texts)}
     used_chars = sorted({ch for text in texts for ch in text})
-    ligature_rules = [(t, mapping[t]) for t in texts if len(t) >= 2]
 
+    # 脚本变体归并：同一语义字的简体/繁体/异体写法归入一个等价类，类内所有码位
+    # 映射到同一个空白字形。无论库中存的是哪种写法（自定义库可由简体输入法录入），
+    # 也无论用户输入哪种写法（含混输），都能触发同一批连字规则。
+    script_variants: dict[str, set[int]] = {}
+    for c in used_chars:
+        canonical = _canonical(c)
+        members = script_variants.setdefault(canonical, set())
+        members.add(ord(canonical))
+        members.add(ord(c))
+        simplified = zh_convert(canonical, "zh-hans")
+        if len(simplified) == 1:
+            members.add(ord(simplified))
+
+    blank_names = [_glyph_name(ord(canonical)) for canonical in script_variants]
     glyph_order = (
         [".notdef", "space"]
         + [_glyph_name(cp) for cp in mapping.values()]
-        + [_glyph_name(ord(c)) for c in used_chars]
+        + blank_names
     )
     cmap = {0x20: "space"}
     cmap.update({cp: _glyph_name(cp) for cp in mapping.values()})
-    cmap.update({ord(c): _glyph_name(ord(c)) for c in used_chars})
-
-    # 简繁等价映射：编码源自繁体数据，为每个繁体字补简体等价码位，指向同一空白字形，
-    # 使用户可用简体输入法（或混输）触发连字。两繁体字映射到同一简体字的罕见冲突时先到先得。
-    used_points = {ord(c) for c in used_chars}
     alias_count = 0
-    for c in used_chars:
-        simplified = zh_convert(c, "zh-hans")
-        if len(simplified) == 1 and simplified != c:
-            point = ord(simplified)
-            if point not in used_points and point not in cmap:
-                cmap[point] = _glyph_name(ord(c))
+    for canonical, members in script_variants.items():
+        name = _glyph_name(ord(canonical))
+        for point in sorted(members):
+            if point in cmap:
+                warnings.warn(f"码位 U+{point:04X} 被多个脚本变体类声明，先到先得")
+                continue
+            cmap[point] = name
+            if name != _glyph_name(point):
                 alias_count += 1
 
     metrics = {".notdef": (NOTDEF_ADVANCE, 0), "space": (SPACE_ADVANCE, 0)}
     metrics.update({_glyph_name(cp): (JIANZI_ADVANCE, 0) for cp in mapping.values()})
-    metrics.update({_glyph_name(ord(c)): (BLANK_ADVANCE, 0) for c in used_chars})
+    metrics.update({_glyph_name(ord(canonical)): (BLANK_ADVANCE, 0) for canonical in script_variants})
 
     placed = {text: place_components(nodes.get(text, []), components) for text in texts}
     # 绘制以字形名为索引（placed 的键是 InputText）
     glyph_paths = {_glyph_name(mapping[text]): paths for text, paths in placed.items()}
+
+    # 连字规则：简繁等价的编码归并后只保留一条（先到先得并告警），其余仍可通过 PUA 码位使用
+    ligature_rules: list[tuple[str, int]] = []
+    canonical_seen: dict[str, str] = {}
+    for text in texts:
+        if len(text) < 2:
+            continue
+        canonical_text = "".join(_canonical(ch) for ch in text)
+        if canonical_text in canonical_seen:
+            warnings.warn(f"编码「{text}」与「{canonical_seen[canonical_text]}」简繁等价，字体中只保留后者")
+            continue
+        canonical_seen[canonical_text] = text
+        ligature_rules.append((text, mapping[text]))
 
     fea_text = _build_fea(ligature_rules)
     family = f"JianziPu {author}"
