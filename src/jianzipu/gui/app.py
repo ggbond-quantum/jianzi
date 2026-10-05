@@ -126,7 +126,7 @@ class JianziPreview(QWidget):
 
 
 class VersionColumn(QWidget):
-    """一个作者版本的对比列：预览 + 来源信息 + 编码/标题输入 + 挑选按钮。"""
+    """一个作者版本的对比列：上贴顶为来源信息，中央为减字预览，下贴底为入库编码/标题/挑选。"""
 
     def __init__(
         self,
@@ -136,33 +136,58 @@ class VersionColumn(QWidget):
     ):
         super().__init__()
         layout = QVBoxLayout(self)
-        header = QLabel(f"作者：{library.author}　编码：{entry.input_text}")
-        header.setAlignment(Qt.AlignmentFlag.AlignCenter)
         preview = JianziPreview()
         preview.set_paths(
             place_components(library.placements(entry.input_text), library.components())
         )
+        code_info = QLabel(f"编码：{entry.input_text}")   # 上行：来源编码
+        author_info = QLabel(f"作者：{library.author}")   # 下行：作者
+        for label in (code_info, author_info):
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         code = QLineEdit(entry.input_text)
         code.setFixedWidth(PREVIEW_SIZE)
         code.setToolTip("写入自定义库的编码（InputText），保存时转简体")
         title = QLineEdit(entry.title)
         title.setFixedWidth(PREVIEW_SIZE)
         title.setToolTip("写入自定义库的标题（Title），默认为风格库中的值")
-        code_row = QHBoxLayout()
-        code_row.addWidget(QLabel("编码："))
-        code_row.addWidget(code, 1)
-        title_row = QHBoxLayout()
-        title_row.addWidget(QLabel("标题："))
-        title_row.addWidget(title, 1)
         button = QPushButton("挑选")
         button.clicked.connect(
             lambda: on_pick(entry, library, code.text().strip(), title.text().strip())
         )
-        layout.addWidget(header)
-        layout.addWidget(preview, alignment=Qt.AlignmentFlag.AlignCenter)
-        layout.addLayout(code_row)
-        layout.addLayout(title_row)
-        layout.addWidget(button)
+
+        top = QWidget()
+        top_box = QVBoxLayout(top)
+        top_box.setContentsMargins(0, 0, 0, 0)
+        top_box.addWidget(code_info)
+        top_box.addWidget(author_info)
+
+        bottom = QWidget()
+        bottom_box = QVBoxLayout(bottom)
+        bottom_box.setContentsMargins(0, 0, 0, 0)
+        bottom_box.addWidget(self._row("编码：", code), alignment=Qt.AlignmentFlag.AlignCenter)
+        bottom_box.addWidget(self._row("标题：", title), alignment=Qt.AlignmentFlag.AlignCenter)
+        bottom_box.addWidget(button, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        # 上下两块等高 → 两侧弹簧相等时预览恰好落在列的正中心
+        block_height = max(top.sizeHint().height(), bottom.sizeHint().height())
+        top.setFixedHeight(block_height)
+        bottom.setFixedHeight(block_height)
+
+        layout.addWidget(top)                                        # 贴顶
+        layout.addStretch(1)
+        layout.addWidget(preview, alignment=Qt.AlignmentFlag.AlignCenter)  # 居中
+        layout.addStretch(1)
+        layout.addWidget(bottom)                                     # 贴底
+
+    @staticmethod
+    def _row(label: str, field: QLineEdit) -> QWidget:
+        """「标签 + 输入框」一行（宽度贴合内容，便于随列居中）。"""
+        row = QWidget()
+        inner = QHBoxLayout(row)
+        inner.setContentsMargins(0, 0, 0, 0)
+        inner.addWidget(QLabel(label))
+        inner.addWidget(field)
+        return row
 
 
 class ComponentTile(QWidget):
@@ -519,6 +544,7 @@ class MainWindow(QMainWindow):
 
     def _show_comparison(self, input_text: str) -> None:
         self._clear_comparison()
+        self._compare_layout.addStretch(1)  # 左右弹簧：列组水平居中
         for library in self._libraries:
             matches = library.find(input_text)
             if not matches:
@@ -530,6 +556,15 @@ class MainWindow(QMainWindow):
                 column = QLabel(f"作者：{library.author}　缺少构件数据 {exc}，无法预览")
                 column.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._compare_layout.addWidget(column)
+        self._compare_layout.addStretch(1)
+
+    def _column_count(self) -> int:
+        """对比区当前列数（不含居中用的弹簧）。"""
+        return sum(
+            1
+            for i in range(self._compare_layout.count())
+            if self._compare_layout.itemAt(i).widget() is not None
+        )
 
     def _pick(
         self, entry: JianziEntry, library: JianziLibrary, target_text: str, target_title: str

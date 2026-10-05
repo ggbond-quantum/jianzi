@@ -1,4 +1,4 @@
-"""GUI 冒烟测试：主窗口这一接缝能构造、能加载库并出画面（不测内部实现）。
+﻿"""GUI 冒烟测试：主窗口这一接缝能构造、能加载库并出画面（不测内部实现）。
 
 离屏运行（QT_QPA_PLATFORM=offscreen）；窗口内部的绘制细节不在测试范围内。
 """
@@ -10,8 +10,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import sqlite3
 
 import pytest
-from PySide6.QtCore import QPointF, Qt
-from PySide6.QtWidgets import QApplication, QLineEdit, QPushButton
+from PySide6.QtCore import QPoint, QPointF, Qt
+from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QPushButton
 
 from jianzipu.core.library import JianziLibrary, create_custom_db, pick_entry
 from jianzipu.core.synthesis import Placement, place_components
@@ -19,6 +19,7 @@ from jianzipu.extract.build import SCHEMA
 from jianzipu.gui.app import (
     TEXT_ROLE,
     ComponentBrowserWindow,
+    JianziPreview,
     MainWindow,
     to_painter_path,
 )
@@ -172,6 +173,51 @@ def _style_entry_texts(window, library_index: int = 0) -> list[str]:
     return [root.child(i).data(0, TEXT_ROLE) for i in range(root.childCount())]
 
 
+def _column(window, index: int = 0):
+    """对比区第 index 列（跳过居中用的弹簧）。"""
+    widgets = [
+        window._compare_layout.itemAt(i).widget()
+        for i in range(window._compare_layout.count())
+        if window._compare_layout.itemAt(i).widget() is not None
+    ]
+    return widgets[index]
+
+
+def test_comparison_column_layout(tmp_path, qapp):
+    """对比列结构：编码/作者贴顶，预览居中，编码/标题/挑选贴底。"""
+    style = make_fixture_db(tmp_path / "style.sqlite")
+    custom = tmp_path / "custom.sqlite"
+    create_custom_db(custom)
+
+    window = MainWindow()
+    try:
+        window.load_style_library(style)
+        window.load_custom_library(custom)
+        window.show()
+        root = window._style_tree.topLevelItem(0)
+        window._style_tree.setCurrentItem(root.child(2))  # 大七
+        qapp.processEvents()
+
+        column = _column(window)
+        labels = [label.text() for label in column.findChildren(QLabel)]
+        assert labels[:2] == ["编码：大七", "作者：云霄客"]  # 编码上行、作者下行
+        edits = column.findChildren(QLineEdit)
+        assert [e.text() for e in edits] == ["大七", "大七"]  # 入库编码/标题输入
+        button = column.findChild(QPushButton)
+        assert button.text() == "挑选"
+
+        # 位置：信息贴顶、按钮贴底、预览居中（留 Qt 默认边距）
+        label_y = column.findChildren(QLabel)[0].mapTo(column, QPoint(0, 0)).y()
+        assert 0 <= label_y <= 12
+        bottom_y = button.mapTo(column, QPoint(0, 0)).y() + button.height()
+        assert abs(bottom_y - column.height()) <= 12
+        preview = column.findChild(JianziPreview)
+        preview_center = preview.mapTo(column, QPoint(0, 0)).y() + preview.height() / 2
+        assert abs(preview_center - column.height() / 2) <= 2
+    finally:
+        window.close()
+
+
 def test_sidebars_are_expandable_directories(tmp_path, qapp):
     """两侧边栏以目录形式显示：目录名 = 库文件名（无后缀），展开后是条目。"""
     style = make_fixture_db(tmp_path / "style.sqlite")
@@ -211,9 +257,9 @@ def test_style_tree_selection_drives_comparison(tmp_path, qapp):
         window.load_custom_library(custom)
         root = window._style_tree.topLevelItem(0)
         window._style_tree.setCurrentItem(root.child(0))
-        assert window._compare_layout.count() == 1
+        assert window._column_count() == 1
         window._style_tree.setCurrentItem(root)
-        assert window._compare_layout.count() == 0
+        assert window._column_count() == 0
     finally:
         window.close()
 
@@ -228,7 +274,7 @@ def test_unload_style_library(tmp_path, qapp):
         window._unload_style_library(str(style))
         assert window._style_tree.topLevelItemCount() == 0
         assert window._libraries == []
-        assert window._compare_layout.count() == 0
+        assert window._column_count() == 0
     finally:
         window.close()
 
@@ -330,7 +376,7 @@ def test_pick_from_comparison_uses_edited_code_and_title(tmp_path, qapp):
         window.load_custom_library(custom)
         root = window._style_tree.topLevelItem(0)
         window._style_tree.setCurrentItem(root.child(0))  # 触发对比渲染
-        column = window._compare_layout.itemAt(0).widget()
+        column = _column(window)
         edits = column.findChildren(QLineEdit)
         edits[0].setText("我的减字")   # 编码
         edits[1].setText("我的标题")   # 标题
@@ -359,7 +405,7 @@ def test_pick_defaults_title_from_style_library(tmp_path, qapp):
         window.load_custom_library(custom)
         root = window._style_tree.topLevelItem(0)
         window._style_tree.setCurrentItem(root.child(0))
-        window._compare_layout.itemAt(0).widget().findChild(QPushButton).click()
+        _column(window).findChild(QPushButton).click()
     finally:
         window.close()
 
@@ -386,7 +432,7 @@ def test_new_empty_custom_library(tmp_path, qapp):
         # 空库可直接作为挑选目标
         root = window._style_tree.topLevelItem(0)
         window._style_tree.setCurrentItem(root.child(0))
-        window._compare_layout.itemAt(0).widget().findChild(QPushButton).click()
+        _column(window).findChild(QPushButton).click()
         assert len(_custom_entry_texts(window)) == 1
     finally:
         window.close()
