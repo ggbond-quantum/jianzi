@@ -108,7 +108,10 @@ def test_normalize_contours_pairs_slightly_offset_mirror_copy():
 
 
 def test_normalize_contours_keeps_both_sheng_holes(shaohao_db):
-    """真实数据「聲」：外框与两个孔洞各有正反两份，规整后恰保留 3 条轮廓。"""
+    """真实数据「聲」：外框与两个孔洞各有正反两份，规整后恰保留 3 条轮廓。
+
+    朝向统一后（外轮廓翻正）：外框为正、两个孔洞均为负（与外框异号）。
+    """
     conn = sqlite3.connect(shaohao_db)
     data = conn.execute("SELECT PathData FROM component WHERE Title = '聲'").fetchone()[0]
     conn.close()
@@ -116,8 +119,12 @@ def test_normalize_contours_keeps_both_sheng_holes(shaohao_db):
     contours = normalize_contours([parse_path(data)])
 
     assert len(contours) == 3  # 外框 + 两个孔洞，六份镜像副本各留一份
-    areas = sorted(contour_area(c) for c in contours)
-    assert areas[0] < 0 < areas[1]  # 一孔洞与外框方向相反
+    areas = [contour_area(c) for c in contours]
+    main = max(areas, key=abs)
+    holes = [a for a in areas if abs(a) < abs(main)]
+    assert main > 0                  # 外轮廓统一为正
+    assert len(holes) == 2
+    assert all(h < 0 for h in holes)  # 两个孔洞都保持空心
 
 
 def test_normalize_contours_keeps_distinct_overlapping_shapes():
@@ -128,3 +135,39 @@ def test_normalize_contours_keeps_distinct_overlapping_shapes():
     )
 
     assert len(normalize_contours([nested])) == 2
+
+
+def test_normalize_unifies_direction_across_overlapping_parts():
+    """方向相反的部件统一朝正：否则重叠区在非零环绕下相互抵消成白色空洞。
+
+    源材料（EMF+）里不同构件的环绕方向不一致（实测少昊紫琴库 2626 对
+    重叠部件方向相反），两个部件部分重叠时重叠区 winding 归零、渲染成空洞。
+    """
+    forward = parse_path("M 0 0 L 100 0 L 100 100 L 0 100 Z")     # 正向
+    backward = parse_path("M 50 0 L 50 100 L 150 100 L 150 0 Z")  # 反向
+
+    # 单个整体反向的部件也要翻正（与放入哪个字无关）
+    contours = normalize_contours([backward])
+    assert contour_area(contours[0]) > 0
+
+    contours = normalize_contours([forward, backward])
+    assert len(contours) == 2
+    areas = [contour_area(c) for c in contours]
+    assert areas[0] > 0 and areas[1] > 0  # 同向 → 重叠区叠加填充
+
+
+def test_normalize_keeps_hole_opposite_after_flip():
+    """整体反向的部件（外框负 + 孔洞正）翻转后外框正、孔洞负：孔洞仍空心。"""
+    reversed_letter = parse_path(
+        "M 0 0 L 0 200 L 200 200 L 200 0 Z"       # 外框（反向）
+        " M 50 50 L 100 50 L 100 100 L 50 100 Z"  # 孔洞（正向，在外框内）
+    )
+
+    contours = normalize_contours([reversed_letter])
+
+    assert len(contours) == 2
+    areas = [contour_area(c) for c in contours]
+    main = max(areas, key=abs)
+    hole = min(areas, key=abs)
+    assert main > 0   # 外轮廓统一为正
+    assert hole < 0   # 孔洞与外轮廓异号（非零环绕下保持空心）

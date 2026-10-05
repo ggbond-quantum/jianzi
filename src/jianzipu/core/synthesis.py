@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from svgpathtools import Path, parse_path
+from svgpathtools import CubicBezier, Line, Path, QuadraticBezier, parse_path
 
 GRID_SIZE = 350  # 减字部件摆放网格（350×350，Y 轴向下）
 
@@ -198,8 +198,48 @@ def drop_mirrored_duplicates(contours: list[list]) -> list[list]:
 
 
 def normalize_contours(paths: list[Path]) -> list[list]:
-    """渲染/编译前的统一规整：切分轮廓 → 去完全重复 → 去镜像重复。"""
-    contours: list[list] = []
+    """渲染/编译前的统一规整：逐部件 切分轮廓 → 去完全重复 → 去镜像重复 → 统一朝向。
+
+    逐部件处理（而不是把全部轮廓混在一起）：朝向统一是以部件为单位的外轮廓
+    翻正，部件之间不构成嵌套关系，混合处理会丢失这一分组语义。
+    """
+    result: list[list] = []
     for path in paths:
-        contours.extend(path_contours(path))
-    return drop_mirrored_duplicates(drop_exact_duplicates(contours))
+        group = drop_mirrored_duplicates(drop_exact_duplicates(path_contours(path)))
+        result.extend(orient_contours(group))
+    return result
+
+
+def _reverse_contour(contour: list) -> list:
+    """反转轮廓的环绕方向：段序倒置、每段首尾互换。"""
+    result = []
+    for segment in reversed(contour):
+        kind = type(segment).__name__
+        if kind == "Line":
+            result.append(Line(segment.end, segment.start))
+        elif kind == "CubicBezier":
+            result.append(
+                CubicBezier(segment.end, segment.control2, segment.control1, segment.start)
+            )
+        elif kind == "QuadraticBezier":
+            result.append(QuadraticBezier(segment.end, segment.control, segment.start))
+        else:
+            raise TypeError(f"未知段类型: {kind}")
+    return result
+
+
+def orient_contours(contours: list[list]) -> list[list]:
+    """统一部件朝向：以最大轮廓为准，整体翻转为「外轮廓为正」。
+
+    部件内部的方向关系（孔洞与外轮廓相反）由源材料保证，这里只做整体翻转
+    开关。必须统一的原因：不同构件的源数据环绕方向不一致（实测少昊紫琴库
+    有 2626 对方向相反又重叠的部件），非零环绕下重叠区 winding 归零，
+    渲染成白色空洞；字体编译（TrueType 同用非零环绕）同样受影响。
+    """
+    if not contours:
+        return contours
+    areas = [contour_area(c) for c in contours]
+    main = max(range(len(contours)), key=lambda index: abs(areas[index]))
+    if areas[main] > 0:
+        return contours
+    return [_reverse_contour(c) for c in contours]
