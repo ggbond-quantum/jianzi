@@ -48,7 +48,7 @@ from jianzipu.core.library import (
     save_custom_db_as,
 )
 from jianzipu.core.scripts import equivalence_key
-from jianzipu.core.synthesis import place_components
+from jianzipu.core.synthesis import normalize_contours, place_components
 
 GRID = 350.0
 PREVIEW_SIZE = 140
@@ -61,20 +61,19 @@ LIB_ROLE = Qt.ItemDataRole.UserRole + 1    # 树节点上挂的所属库路径
 def to_painter_path(paths: list, size: int) -> QPainterPath:
     """svgpathtools 的 Path 列表 → QPainterPath（350 网格等比映射到 size×size）。
 
-    用非零环绕填充（而非 Qt 默认的 even-odd）：源数据中部分构件（三/七/九/十）
-    的闭合轮廓被原样走两遍，even-odd 下会互相抵消而渲染成空心；字体按非零环绕
-    规则渲染（编译层另有轮廓去重），此处与之一致才能所见即所得。
+    轮廓先经 core 的规整（去完全重复、去镜像重复），与编译层同一条代码路径；
+    填充用非零环绕（与 TrueType 一致）。源数据中「三/七/九/十」的轮廓被原样走
+    两遍、「聲」有正反两份重复图形，不规整会在 even-odd 或抵消下渲染成空心。
     """
     scale = size / GRID
     result = QPainterPath()
     result.setFillRule(Qt.FillRule.WindingFill)
-    for path in paths:
-        segments = list(path)
-        if not segments:
+    for contour in normalize_contours(paths):
+        if not contour:
             continue
-        cursor = segments[0].start
+        cursor = contour[0].start
         result.moveTo(cursor.real * scale, cursor.imag * scale)
-        for seg in segments:
+        for seg in contour:
             if abs(seg.start - cursor) > 1e-6:
                 result.moveTo(seg.start.real * scale, seg.start.imag * scale)
             kind = type(seg).__name__
@@ -99,7 +98,7 @@ def to_painter_path(paths: list, size: int) -> QPainterPath:
             else:
                 raise TypeError(f"未知段类型: {kind}")
             cursor = seg.end
-        if abs(cursor - segments[0].start) < 1e-6:
+        if abs(cursor - contour[0].start) < 1e-6:
             result.closeSubpath()
     return result
 
@@ -339,6 +338,8 @@ class ComponentBrowserWindow(QMainWindow):
     def _refresh_grid(self) -> None:
         while self._grid.count():
             item = self._grid.takeAt(0)
+            if item is None:
+                continue
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
@@ -538,6 +539,8 @@ class MainWindow(QMainWindow):
     def _clear_comparison(self) -> None:
         while self._compare_layout.count():
             item = self._compare_layout.takeAt(0)
+            if item is None:
+                continue
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
@@ -563,7 +566,8 @@ class MainWindow(QMainWindow):
         return sum(
             1
             for i in range(self._compare_layout.count())
-            if self._compare_layout.itemAt(i).widget() is not None
+            if (item := self._compare_layout.itemAt(i)) is not None
+            and item.widget() is not None
         )
 
     def _pick(
@@ -583,10 +587,11 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"已挑入：编码「{result.normalized_text}」", 5000)
         else:
             existing = result.existing
+            existing_title = existing.title if existing is not None else ""
             QMessageBox.information(
                 self,
                 "已存在",
-                f"已存在编码「{result.normalized_text}」（标题：{existing.title}）。"
+                f"已存在编码「{result.normalized_text}」（标题：{existing_title}）。"
                 "\n可在左侧自定义库中右键重命名，或换个编码。",
             )
         self._refresh_custom_list()
@@ -643,6 +648,8 @@ class MainWindow(QMainWindow):
             self._unload_style_library(path)
 
     def _rename_custom_entry(self, text: str) -> None:
+        if self._custom is None:
+            return
         new_text, ok = QInputDialog.getText(self, "重命名", "新编码（保存时转简体）：", text=text)
         if not ok or not new_text.strip():
             return
@@ -654,6 +661,8 @@ class MainWindow(QMainWindow):
         self._refresh_custom_list()
 
     def _delete_custom_entry(self, text: str) -> None:
+        if self._custom is None:
+            return
         answer = QMessageBox.question(self, "删除", f"确定从自定义库删除「{text}」？")
         if answer != QMessageBox.StandardButton.Yes:
             return

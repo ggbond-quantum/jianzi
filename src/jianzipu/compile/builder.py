@@ -20,7 +20,7 @@ from fontTools.ttLib.tables._n_a_m_e import NameRecord
 from zhconv import convert as zh_convert
 
 from jianzipu.core.scripts import PREFIX_CHAR, canonical_char
-from jianzipu.core.synthesis import Placement, place_components
+from jianzipu.core.synthesis import Placement, normalize_contours, place_components
 
 UPEM = 1000
 GRID = 350.0
@@ -66,52 +66,8 @@ def _to_font_units(x: float, y: float) -> tuple[float, float]:
     return (MARGIN * UPEM + x * s, MARGIN * UPEM + content - y * s)
 
 
-def _contours(path) -> list[list]:
-    """按段连续性把 Path 拆成轮廓（子路径在同一点接续时视为同一轮廓）。"""
-    segs = list(path)
-    if not segs:
-        return []
-    groups, cur = [], [segs[0]]
-    for prev, seg in zip(segs, segs[1:]):
-        if abs(seg.start - prev.end) > 1e-6:
-            groups.append(cur)
-            cur = []
-        cur.append(seg)
-    groups.append(cur)
-    return groups
-
-
-def _seg_key(seg) -> tuple:
-    values = []
-    for name in ("start", "control1", "control2", "control", "end"):
-        z = getattr(seg, name, None)
-        if z is not None:
-            values.append((round(z.real, 3), round(z.imag, 3)))
-    return (type(seg).__name__, tuple(values))
-
-
-def _dedupe_contours(contours: list[list]) -> list[list]:
-    """去掉重复轮廓：源数据中同一闭合轮廓可能被原样走两遍（[A, A]）。"""
-    result, seen = [], set()
-    for contour in contours:
-        if contour and len(contour) % 2 == 0:
-            half = len(contour) // 2
-            first, second = contour[:half], contour[half:]
-            if [_seg_key(s) for s in first] == [_seg_key(s) for s in second]:
-                contour = first
-        key = tuple(_seg_key(s) for s in contour)
-        if key in seen:
-            continue
-        seen.add(key)
-        result.append(contour)
-    return result
-
-
 def _draw_paths(pen, paths) -> None:
-    contours = []
-    for path in paths:
-        contours.extend(_contours(path))
-    for contour in _dedupe_contours(contours):
+    for contour in normalize_contours(paths):
         first = contour[0].start
         pen.moveTo(_to_font_units(first.real, first.imag))
         for seg in contour:

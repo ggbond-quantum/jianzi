@@ -147,6 +147,19 @@ def test_to_painter_path_fills_double_traced_contours(qapp):
     assert qpath.contains(QPointF(30, 30))  # 三角形内部
 
 
+def test_to_painter_path_fills_mirrored_duplicate_contours(qapp):
+    """正反两份重复图形（如「聲」）必须实心，孔洞保持空心。"""
+    doubled = (
+        "M 0 0 L 100 0 L 100 100 L 0 100 Z M 20 20 L 20 80 L 80 80 L 80 20 Z"
+        " M 0 0 L 0 100 L 100 100 L 100 0 Z M 20 20 L 80 20 L 80 80 L 20 80 Z"
+    )
+    paths = place_components([Placement(1, 0, 0, 350, 350)], {1: doubled})
+    qpath = to_painter_path(paths, 350)
+
+    assert qpath.contains(QPointF(35, 175))        # 笔画带内 → 填充
+    assert not qpath.contains(QPointF(175, 175))   # 孔洞 → 空心
+
+
 def test_comparison_survives_missing_component_data(tmp_path, qapp):
     """库缺构件轮廓时（历史数据或手工 SQL）对比应降级提示，不得让异常逃逸。"""
     broken = make_incomplete_db(tmp_path / "broken.sqlite")
