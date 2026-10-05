@@ -284,12 +284,14 @@ def pick_entry(
     source_path: Path,
     source_text: str,
     target_text: str | None = None,
+    target_title: str | None = None,
 ) -> PickResult:
     """把一个风格库中的减字挑入自定义库：逐条转简体后写入。
 
-    source_text 是来源库中的编码；target_text 是写进自定义库的编码，
-    省略时用来源编码的简体形式（可用自定义编码，两个来源的同名减字即可共存）。
-    目标编码已存在时返回冲突与已存在条目，由调用方提示"编辑/查看"，不覆盖、不写入。
+    source_text 是来源库中的编码；target_text / target_title 是写进自定义库的
+    编码与标题，省略时用来源条目的对应值（编码转简体；两个来源的同名减字
+    可借此共存）。目标编码已存在时返回冲突与已存在条目，由调用方提示，
+    不覆盖、不写入。
     """
     style = JianziLibrary.load(source_path)
     try:
@@ -319,7 +321,7 @@ def pick_entry(
         conn.execute(
             "INSERT INTO jianzi (InputText, Title, SourceAuthor, SourceID)"
             " VALUES (?, ?, NULL, ?)",
-            (normalized, source_entry.title, source_entry.source_id),
+            (normalized, target_title or source_entry.title, source_entry.source_id),
         )
         conn.executemany(
             "INSERT INTO node (InputText, Seq, StrokeID, DistX, DistY, DistWidth, DistHeight)"

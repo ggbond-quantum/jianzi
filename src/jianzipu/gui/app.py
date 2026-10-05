@@ -21,13 +21,13 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QLineEdit,
-    QListWidget,
-    QListWidgetItem,
     QMainWindow,
     QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -54,6 +54,8 @@ GRID = 350.0
 PREVIEW_SIZE = 140
 TILE_SIZE = 88
 DB_FILTER = "SQLite 数据库 (*.sqlite *.jdb);;所有文件 (*)"
+TEXT_ROLE = Qt.ItemDataRole.UserRole       # 树节点上挂的条目编码（InputText）
+LIB_ROLE = Qt.ItemDataRole.UserRole + 1    # 树节点上挂的所属库路径
 
 
 def to_painter_path(paths: list, size: int) -> QPainterPath:
@@ -124,33 +126,42 @@ class JianziPreview(QWidget):
 
 
 class VersionColumn(QWidget):
-    """一个作者版本的对比列：预览 + 来源信息 + 编码输入 + 挑选按钮。"""
+    """一个作者版本的对比列：预览 + 来源信息 + 编码/标题输入 + 挑选按钮。"""
 
     def __init__(
         self,
         entry: JianziEntry,
         library: JianziLibrary,
-        on_pick: Callable[[JianziEntry, JianziLibrary, str], None],
+        on_pick: Callable[[JianziEntry, JianziLibrary, str, str], None],
     ):
         super().__init__()
         layout = QVBoxLayout(self)
-        header = QLabel(f"{library.author}　{entry.input_text}")
+        header = QLabel(f"作者：{library.author}　编码：{entry.input_text}")
         header.setAlignment(Qt.AlignmentFlag.AlignCenter)
         preview = JianziPreview()
         preview.set_paths(
             place_components(library.placements(entry.input_text), library.components())
         )
-        title = QLabel(entry.title or "（无标题）")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         code = QLineEdit(entry.input_text)
         code.setFixedWidth(PREVIEW_SIZE)
-        code.setToolTip("写入自定义库的编码，可自定义（保存时转简体）")
+        code.setToolTip("写入自定义库的编码（InputText），保存时转简体")
+        title = QLineEdit(entry.title)
+        title.setFixedWidth(PREVIEW_SIZE)
+        title.setToolTip("写入自定义库的标题（Title），默认为风格库中的值")
+        code_row = QHBoxLayout()
+        code_row.addWidget(QLabel("编码："))
+        code_row.addWidget(code, 1)
+        title_row = QHBoxLayout()
+        title_row.addWidget(QLabel("标题："))
+        title_row.addWidget(title, 1)
         button = QPushButton("挑选")
-        button.clicked.connect(lambda: on_pick(entry, library, code.text().strip()))
+        button.clicked.connect(
+            lambda: on_pick(entry, library, code.text().strip(), title.text().strip())
+        )
         layout.addWidget(header)
         layout.addWidget(preview, alignment=Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(title)
-        layout.addWidget(code)
+        layout.addLayout(code_row)
+        layout.addLayout(title_row)
         layout.addWidget(button)
 
 
@@ -172,11 +183,11 @@ class ComponentTile(QWidget):
                 [fit_component_placement(component)], {component.stroke_id: component.path_data}
             )
         )
-        label = QLabel(component.title or "（无名）")
+        label = QLabel(f"名称：{component.title or '（无名）'}")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(preview, alignment=Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(label)
-        self.setToolTip(f"{component.stroke_id}　{component.title}")
+        self.setToolTip(f"编号：{component.stroke_id}　名称：{component.title}")
         self.setAutoFillBackground(True)
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt 命名约定
@@ -321,9 +332,11 @@ class ComponentBrowserWindow(QMainWindow):
                 col, row = 0, row + 1
 
     def _refresh_status(self) -> None:
-        source = "未加载风格库" if self._style is None else self._style.path.name
-        target = "未打开自定义库" if self._custom is None else self._custom.path.name
-        self.statusBar().showMessage(f"构件来源：{source}（{len(self._components)} 个构件）；入库目标：{target}")
+        source = "未加载" if self._style is None else Path(self._style.path).stem
+        target = "未加载" if self._custom is None else Path(self._custom.path).stem
+        self.statusBar().showMessage(
+            f"构件来源：{source}（共 {len(self._components)} 个部件）；入库目标：{target}"
+        )
 
     # ---- 文件操作 ----
 
@@ -354,7 +367,6 @@ class MainWindow(QMainWindow):
         self.resize(1000, 680)
         self._libraries: list[JianziLibrary] = []
         self._custom: JianziLibrary | None = None
-        self._entries: list[tuple[JianziEntry, JianziLibrary]] = []
         self._component_browser: ComponentBrowserWindow | None = None
         self._build_ui()
         self._refresh_status()
@@ -401,7 +413,7 @@ class MainWindow(QMainWindow):
         open_custom = QPushButton("打开自定义库…")
         browse_components = QPushButton("浏览基本部件…")
         self._search = QLineEdit()
-        self._search.setPlaceholderText("搜索编码（等价匹配：简繁写法互认）")
+        self._search.setPlaceholderText("搜索编码")
         bar.addWidget(load_style)
         bar.addWidget(new_custom)
         bar.addWidget(save_custom)
@@ -413,11 +425,12 @@ class MainWindow(QMainWindow):
         middle = QHBoxLayout()
 
         custom_box = QVBoxLayout()
-        custom_box.addWidget(QLabel("自定义库（右键重命名/删除）"))
-        self._custom_list = QListWidget()
-        self._custom_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self._custom_list.customContextMenuRequested.connect(self._custom_context_menu)
-        custom_box.addWidget(self._custom_list, 1)
+        custom_box.addWidget(QLabel("自定义库（目录右键可取消加载；条目右键可重命名/删除）"))
+        self._custom_tree = QTreeWidget()
+        self._custom_tree.setHeaderLabel("自定义库")
+        self._custom_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._custom_tree.customContextMenuRequested.connect(self._custom_context_menu)
+        custom_box.addWidget(self._custom_tree, 1)
         middle.addLayout(custom_box, 2)
 
         self._compare_host = QWidget()
@@ -428,10 +441,13 @@ class MainWindow(QMainWindow):
         middle.addWidget(area, 5)
 
         style_box = QVBoxLayout()
-        style_box.addWidget(QLabel("风格库（来源，只读）"))
-        self._list = QListWidget()
-        self._list.currentRowChanged.connect(self._show_comparison)
-        style_box.addWidget(self._list, 1)
+        style_box.addWidget(QLabel("风格库（只读；目录右键可取消加载）"))
+        self._style_tree = QTreeWidget()
+        self._style_tree.setHeaderLabel("风格库")
+        self._style_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._style_tree.customContextMenuRequested.connect(self._style_context_menu)
+        self._style_tree.currentItemChanged.connect(self._on_style_selection)
+        style_box.addWidget(self._style_tree, 1)
         middle.addLayout(style_box, 2)
 
         outer.addLayout(middle, 1)
@@ -447,86 +463,149 @@ class MainWindow(QMainWindow):
     # ---- 浏览与对比 ----
 
     def _refresh_list(self) -> None:
+        """刷新风格库目录树：每个库一个可展开目录，条目挂在目录下。"""
         query_key = equivalence_key(self._search.text())
-        self._list.clear()
-        self._entries = []
+        self._style_tree.clear()
         for library in self._libraries:
+            root = QTreeWidgetItem([Path(library.path).stem])  # 目录名：库文件名（无后缀）
+            root.setData(0, LIB_ROLE, str(library.path))
             for entry in library.entries():
                 if query_key and query_key not in equivalence_key(entry.input_text):
                     continue
-                self._entries.append((entry, library))
-                self._list.addItem(f"{entry.input_text}　·　{entry.source_author}")
+                child = QTreeWidgetItem([self._entry_label(entry)])
+                child.setData(0, TEXT_ROLE, entry.input_text)
+                child.setData(0, LIB_ROLE, str(library.path))
+                root.addChild(child)
+            self._style_tree.addTopLevelItem(root)
+            root.setExpanded(bool(query_key))
         self._refresh_custom_list()
 
     def _refresh_custom_list(self) -> None:
-        """刷新自定义库边栏（按 InputText 排序，与搜索框联动）。"""
+        """刷新自定义库目录树（目录 + 按 InputText 排序的条目，与搜索框联动）。"""
         query_key = equivalence_key(self._search.text())
-        self._custom_list.clear()
+        self._custom_tree.clear()
         if self._custom is None:
             return
+        root = QTreeWidgetItem([Path(self._custom.path).stem])
+        root.setData(0, LIB_ROLE, str(self._custom.path))
         for entry in sorted(self._custom.entries(), key=lambda e: e.input_text):
             if query_key and query_key not in equivalence_key(entry.input_text):
                 continue
-            item = QListWidgetItem(f"{entry.input_text}　·　{entry.title or '（无标题）'}")
-            item.setData(Qt.ItemDataRole.UserRole, entry.input_text)
-            self._custom_list.addItem(item)
+            child = QTreeWidgetItem([self._entry_label(entry)])
+            child.setData(0, TEXT_ROLE, entry.input_text)
+            child.setData(0, LIB_ROLE, str(self._custom.path))
+            root.addChild(child)
+        self._custom_tree.addTopLevelItem(root)
+        root.setExpanded(True)  # 工作库默认展开，便于查看已入库条目
 
-    def _show_comparison(self, row: int) -> None:
+    @staticmethod
+    def _entry_label(entry: JianziEntry) -> str:
+        """条目文字：中文键名 + 值，明确每个字段的含义。"""
+        return f"编码：{entry.input_text}　标题：{entry.title or '（无标题）'}"
+
+    def _on_style_selection(self, current, _previous) -> None:
+        text = current.data(0, TEXT_ROLE) if current is not None else None
+        if text:
+            self._show_comparison(text)
+        else:
+            self._clear_comparison()
+
+    def _clear_comparison(self) -> None:
         while self._compare_layout.count():
             item = self._compare_layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
-        if row < 0 or row >= len(self._entries):
-            return
-        entry, _ = self._entries[row]
+
+    def _show_comparison(self, input_text: str) -> None:
+        self._clear_comparison()
         for library in self._libraries:
-            matches = library.find(entry.input_text)
+            matches = library.find(input_text)
             if not matches:
                 continue
             try:
                 column = VersionColumn(matches[0], library, self._pick)
             except KeyError as exc:
                 # 库缺构件轮廓（历史数据或手工 SQL）：降级提示，不影响其余对比
-                column = QLabel(f"{library.author}：缺少构件数据 {exc}，无法预览")
+                column = QLabel(f"作者：{library.author}　缺少构件数据 {exc}，无法预览")
                 column.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._compare_layout.addWidget(column)
 
-    def _pick(self, entry: JianziEntry, library: JianziLibrary, target_text: str) -> None:
+    def _pick(
+        self, entry: JianziEntry, library: JianziLibrary, target_text: str, target_title: str
+    ) -> None:
         if self._custom is None:
             QMessageBox.warning(self, "挑选", "请先打开或保存一个自定义库。")
             return
         result = pick_entry(
-            self._custom.path, library.path, entry.input_text, target_text or None
+            self._custom.path,
+            library.path,
+            entry.input_text,
+            target_text or None,
+            target_title or None,
         )
         if result.status == "inserted":
-            self.statusBar().showMessage(f"已挑入「{result.normalized_text}」", 5000)
+            self.statusBar().showMessage(f"已挑入：编码「{result.normalized_text}」", 5000)
         else:
             existing = result.existing
             QMessageBox.information(
                 self,
                 "已存在",
-                f"已存在「{result.normalized_text}」：{existing.title}。"
+                f"已存在编码「{result.normalized_text}」（标题：{existing.title}）。"
                 "\n可在左侧自定义库中右键重命名，或换个编码。",
             )
         self._refresh_custom_list()
         self._refresh_status()
 
-    # ---- 自定义库条目：右键重命名 / 删除 ----
+    # ---- 库加载 / 取消加载 ----
+
+    def _unload_style_library(self, path: str) -> None:
+        for index, library in enumerate(self._libraries):
+            if str(library.path) == path:
+                library.close()
+                del self._libraries[index]
+                break
+        self._refresh_list()
+        self._clear_comparison()
+        self._refresh_status()
+
+    def _unload_custom_library(self) -> None:
+        if self._custom is not None:
+            self._custom.close()
+            self._custom = None
+        self._refresh_custom_list()
+        self._refresh_status()
+
+    # ---- 右键菜单 ----
 
     def _custom_context_menu(self, pos) -> None:
-        item = self._custom_list.itemAt(pos)
+        item = self._custom_tree.itemAt(pos)
         if item is None or self._custom is None:
             return
-        text = item.data(Qt.ItemDataRole.UserRole)
+        text = item.data(0, TEXT_ROLE)
         menu = QMenu(self)
+        if text is None:  # 点中目录：取消加载
+            unload_action = menu.addAction(f"取消加载「{Path(self._custom.path).stem}」")
+            if menu.exec(self._custom_tree.mapToGlobal(pos)) == unload_action:
+                self._unload_custom_library()
+            return
         rename_action = menu.addAction("重命名…")
         delete_action = menu.addAction("删除")
-        chosen = menu.exec(self._custom_list.mapToGlobal(pos))
+        chosen = menu.exec(self._custom_tree.mapToGlobal(pos))
         if chosen == rename_action:
             self._rename_custom_entry(text)
         elif chosen == delete_action:
             self._delete_custom_entry(text)
+
+    def _style_context_menu(self, pos) -> None:
+        item = self._style_tree.itemAt(pos)
+        if item is None or item.data(0, TEXT_ROLE) is not None:
+            return  # 仅目录可操作（风格库条目只读）
+        path = item.data(0, LIB_ROLE)
+        menu = QMenu(self)
+        unload_action = menu.addAction(f"取消加载「{Path(path).stem}」")
+        if menu.exec(self._style_tree.mapToGlobal(pos)) == unload_action:
+            self._unload_style_library(path)
 
     def _rename_custom_entry(self, text: str) -> None:
         new_text, ok = QInputDialog.getText(self, "重命名", "新编码（保存时转简体）：", text=text)
@@ -620,10 +699,12 @@ class MainWindow(QMainWindow):
 
     def _refresh_status(self) -> None:
         if self._custom is None:
-            custom = "自定义库：未打开"
+            custom = "未加载"
         else:
-            custom = f"自定义库：{self._custom.path.name}（{len(self._custom.entries())} 个减字）"
-        self.statusBar().showMessage(f"已加载风格库 {len(self._libraries)} 个；{custom}")
+            custom = f"{self._custom.path.stem}（{len(self._custom.entries())} 个减字）"
+        self.statusBar().showMessage(
+            f"已加载风格库：{len(self._libraries)} 个；当前自定义库：{custom}"
+        )
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt 命名约定
         for library in self._libraries:

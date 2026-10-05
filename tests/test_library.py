@@ -286,6 +286,24 @@ def test_pick_entry_does_not_record_author(tmp_path):
         lib.close()
 
 
+def test_pick_entry_uses_source_title_by_default(tmp_path):
+    """不传标题时默认取来源条目的标题；传了则用传入值。"""
+    style = make_fixture_db(tmp_path / "style.sqlite")
+    custom = tmp_path / "custom.sqlite"
+    create_custom_db(custom)
+
+    pick_entry(custom, style, "大換七", target_text="挑换", target_title="我的标题")
+    pick_entry(custom, style, "大七")
+
+    lib = JianziLibrary.load(custom)
+    try:
+        titles = {e.input_text: e.title for e in lib.entries()}
+        assert titles["挑换"] == "我的标题"
+        assert titles["大七"] == "大七"  # fixture 中该条目的标题
+    finally:
+        lib.close()
+
+
 def test_pick_entry_with_custom_target_code(tmp_path):
     """挑选入库时可用自定义编码：取来源的字体版本，存为指定的 InputText。"""
     style = make_fixture_db(tmp_path / "style.sqlite")

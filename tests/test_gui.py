@@ -16,7 +16,12 @@ from PySide6.QtWidgets import QApplication, QLineEdit, QPushButton
 from jianzipu.core.library import JianziLibrary, create_custom_db, pick_entry
 from jianzipu.core.synthesis import Placement, place_components
 from jianzipu.extract.build import SCHEMA
-from jianzipu.gui.app import ComponentBrowserWindow, MainWindow, to_painter_path
+from jianzipu.gui.app import (
+    TEXT_ROLE,
+    ComponentBrowserWindow,
+    MainWindow,
+    to_painter_path,
+)
 from test_library import make_fixture_db
 
 
@@ -149,9 +154,99 @@ def test_comparison_survives_missing_component_data(tmp_path, qapp):
         window.load_style_library(broken)
         window.show()
         qapp.processEvents()
-        window._show_comparison(0)  # 直接调用：异常会传播到测试，不会被 Qt 吞掉
+        window._show_comparison("大七")  # 直接调用：异常会传播到测试，不会被 Qt 吞掉
         assert window.isVisible()
         assert not window.grab().isNull()
+    finally:
+        window.close()
+
+
+def _custom_entry_texts(window) -> list[str]:
+    """自定义库目录下的条目编码（按树顺序）。"""
+    root = window._custom_tree.topLevelItem(0)
+    return [root.child(i).data(0, TEXT_ROLE) for i in range(root.childCount())]
+
+
+def _style_entry_texts(window, library_index: int = 0) -> list[str]:
+    root = window._style_tree.topLevelItem(library_index)
+    return [root.child(i).data(0, TEXT_ROLE) for i in range(root.childCount())]
+
+
+def test_sidebars_are_expandable_directories(tmp_path, qapp):
+    """两侧边栏以目录形式显示：目录名 = 库文件名（无后缀），展开后是条目。"""
+    style = make_fixture_db(tmp_path / "style.sqlite")
+    custom = tmp_path / "custom.sqlite"
+    create_custom_db(custom)
+    pick_entry(custom, style, "大換七")
+
+    window = MainWindow()
+    try:
+        window.load_style_library(style)
+        window.load_custom_library(custom)
+
+        assert window._style_tree.topLevelItemCount() == 1
+        root = window._style_tree.topLevelItem(0)
+        assert root.text(0) == "style"  # 文件名为 style.sqlite，目录名不带后缀
+        assert root.childCount() == 4
+
+        custom_root = window._custom_tree.topLevelItem(0)
+        assert custom_root.text(0) == "custom"
+        assert custom_root.childCount() == 1
+        assert _custom_entry_texts(window) == ["大换七"]
+        # 条目文字带中文键名
+        assert custom_root.child(0).text(0) == "编码：大换七　标题：挑换"
+    finally:
+        window.close()
+
+
+def test_style_tree_selection_drives_comparison(tmp_path, qapp):
+    """选中风格库目录下的条目 → 中栏出对比；选中目录本身 → 清空对比。"""
+    style = make_fixture_db(tmp_path / "style.sqlite")
+    custom = tmp_path / "custom.sqlite"
+    create_custom_db(custom)
+
+    window = MainWindow()
+    try:
+        window.load_style_library(style)
+        window.load_custom_library(custom)
+        root = window._style_tree.topLevelItem(0)
+        window._style_tree.setCurrentItem(root.child(0))
+        assert window._compare_layout.count() == 1
+        window._style_tree.setCurrentItem(root)
+        assert window._compare_layout.count() == 0
+    finally:
+        window.close()
+
+
+def test_unload_style_library(tmp_path, qapp):
+    """取消加载风格库：目录与对比一并消失，构件来源不再指向它。"""
+    style = make_fixture_db(tmp_path / "style.sqlite")
+    window = MainWindow()
+    try:
+        window.load_style_library(style)
+        assert window._style_tree.topLevelItemCount() == 1
+        window._unload_style_library(str(style))
+        assert window._style_tree.topLevelItemCount() == 0
+        assert window._libraries == []
+        assert window._compare_layout.count() == 0
+    finally:
+        window.close()
+
+
+def test_unload_custom_library(tmp_path, qapp):
+    """取消加载自定义库：目录消失，挑选目标置空。"""
+    style = make_fixture_db(tmp_path / "style.sqlite")
+    custom = tmp_path / "custom.sqlite"
+    create_custom_db(custom)
+
+    window = MainWindow()
+    try:
+        window.load_style_library(style)
+        window.load_custom_library(custom)
+        assert window._custom_tree.topLevelItemCount() == 1
+        window._unload_custom_library()
+        assert window._custom_tree.topLevelItemCount() == 0
+        assert window._custom is None
     finally:
         window.close()
 
@@ -188,10 +283,7 @@ def test_custom_sidebar_lists_entries_sorted_by_input_text(tmp_path, qapp):
     try:
         window.load_style_library(style)
         window.load_custom_library(custom)
-        texts = [
-            window._custom_list.item(i).data(Qt.ItemDataRole.UserRole)
-            for i in range(window._custom_list.count())
-        ]
+        texts = _custom_entry_texts(window)
         assert texts == sorted(texts)
         assert texts == ["上七九应合散勾五", "大换七"]
     finally:
@@ -209,25 +301,25 @@ def test_search_filters_both_sidebars(tmp_path, qapp):
     try:
         window.load_style_library(style)
         window.load_custom_library(custom)
-        assert window._custom_list.count() == 1
+        assert len(_custom_entry_texts(window)) == 1
 
         window._search.setText("大换七")  # 简体查询命中库中的「大换七」
-        assert window._custom_list.count() == 1
-        assert window._list.count() == 1
+        assert _custom_entry_texts(window) == ["大换七"]
+        assert _style_entry_texts(window) == ["大換七"]
 
         window._search.setText("不存在的编码")
-        assert window._custom_list.count() == 0
-        assert window._list.count() == 0
+        assert _custom_entry_texts(window) == []
+        assert _style_entry_texts(window) == []
 
         window._search.setText("")
-        assert window._custom_list.count() == 1
-        assert window._list.count() == 4
+        assert len(_custom_entry_texts(window)) == 1
+        assert len(_style_entry_texts(window)) == 4
     finally:
         window.close()
 
 
-def test_pick_from_comparison_uses_edited_code(tmp_path, qapp):
-    """对比列的编码可自定义：挑选时按输入框内容入库。"""
+def test_pick_from_comparison_uses_edited_code_and_title(tmp_path, qapp):
+    """对比列的编码与标题均可自定义：挑选时按输入框内容入库。"""
     style = make_fixture_db(tmp_path / "style.sqlite")
     custom = tmp_path / "custom.sqlite"
     create_custom_db(custom)
@@ -236,24 +328,51 @@ def test_pick_from_comparison_uses_edited_code(tmp_path, qapp):
     try:
         window.load_style_library(style)
         window.load_custom_library(custom)
-        window._list.setCurrentRow(0)  # 触发对比渲染
+        root = window._style_tree.topLevelItem(0)
+        window._style_tree.setCurrentItem(root.child(0))  # 触发对比渲染
         column = window._compare_layout.itemAt(0).widget()
-        column.findChild(QLineEdit).setText("我的减字")
+        edits = column.findChildren(QLineEdit)
+        edits[0].setText("我的减字")   # 编码
+        edits[1].setText("我的标题")   # 标题
         column.findChild(QPushButton).click()
-        assert window._custom_list.count() == 1
-        assert window._custom_list.item(0).data(Qt.ItemDataRole.UserRole) == "我的减字"
+        assert _custom_entry_texts(window) == ["我的减字"]
     finally:
         window.close()
 
     lib = JianziLibrary.load(custom)
     try:
-        assert [e.input_text for e in lib.entries()] == ["我的减字"]
+        entry = lib.entries()[0]
+        assert (entry.input_text, entry.title) == ("我的减字", "我的标题")
+    finally:
+        lib.close()
+
+
+def test_pick_defaults_title_from_style_library(tmp_path, qapp):
+    """标题默认取风格库的值（不改输入框直接挑选）。"""
+    style = make_fixture_db(tmp_path / "style.sqlite")
+    custom = tmp_path / "custom.sqlite"
+    create_custom_db(custom)
+
+    window = MainWindow()
+    try:
+        window.load_style_library(style)
+        window.load_custom_library(custom)
+        root = window._style_tree.topLevelItem(0)
+        window._style_tree.setCurrentItem(root.child(0))
+        window._compare_layout.itemAt(0).widget().findChild(QPushButton).click()
+    finally:
+        window.close()
+
+    lib = JianziLibrary.load(custom)
+    try:
+        entry = lib.entries()[0]
+        assert entry.title == "长锁"  # fixture 中「上七九應合散勾五」的标题
     finally:
         lib.close()
 
 
 def test_new_empty_custom_library(tmp_path, qapp):
-    """新建空白自定义库：边栏为空，随后可直接挑选入库。"""
+    """新建空白自定义库：目录为空，随后可直接挑选入库。"""
     style = make_fixture_db(tmp_path / "style.sqlite")
     dest = tmp_path / "blank.sqlite"
 
@@ -262,13 +381,13 @@ def test_new_empty_custom_library(tmp_path, qapp):
         window.load_style_library(style)
         window.new_custom_library(dest)
         assert window._custom is not None
-        assert window._custom_list.count() == 0
+        assert _custom_entry_texts(window) == []
 
         # 空库可直接作为挑选目标
-        window._list.setCurrentRow(0)
-        column = window._compare_layout.itemAt(0).widget()
-        column.findChild(QPushButton).click()
-        assert window._custom_list.count() == 1
+        root = window._style_tree.topLevelItem(0)
+        window._style_tree.setCurrentItem(root.child(0))
+        window._compare_layout.itemAt(0).widget().findChild(QPushButton).click()
+        assert len(_custom_entry_texts(window)) == 1
     finally:
         window.close()
 
@@ -290,7 +409,7 @@ def test_save_as_from_style_creates_custom_library(tmp_path, qapp):
         window.load_style_library(style)
         message = window.save_custom_as(dest)
         assert "另存为" in message
-        assert window._custom_list.count() == 4
+        assert len(_custom_entry_texts(window)) == 4
     finally:
         window.close()
 
