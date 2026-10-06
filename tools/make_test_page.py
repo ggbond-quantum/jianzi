@@ -1,8 +1,10 @@
+# pyright: reportAttributeAccessIssue=false
+# uharfbuzz 的 API 来自 C 扩展 _harfbuzz.pyd，无类型存根，Pylance 无法静态解析其属性
 """生成字体测试页与样张，并做发布校验（开发工具）。
 
 用法：
-    uv run python tools/make_test_page.py --ttf dist/JianziPu-少昊紫琴.ttf \\
-        --mapping dist/char_to_unicode-少昊紫琴.json --out-dir dist
+    uv run python tools/make_test_page.py --ttf path/to/font.ttf \\
+        --mapping path/to/char_to_unicode.json --out-dir path/to/output
 
 功能：
 1. 全量校验：映射中每条连字编码经 HarfBuzz 塑形必须恰好等于其 PUA 字形
