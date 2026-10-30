@@ -91,11 +91,15 @@ def test_jianzi_mapped_to_pua_with_full_advance(built):
     assert font["hmtx"]["uniE000"][0] == 1000
 
 
-def test_blank_hanzi_glyphs_are_empty(built):
+def test_blank_hanzi_glyphs_carry_invisible_marker(built):
+    """空白汉字字形带 1 单位退化轮廓：完全空轮廓会被 Word 当作缺字并替换字体（ADR 0011）。"""
     font = TTFont(built.ttf_path)
     glyph = font["glyf"]["uni5927"]  # 大
-    assert glyph.numberOfContours == 0
+    assert glyph.numberOfContours == 1
+    assert len(glyph.coordinates) == 3
+    assert max(x for x, y in glyph.coordinates) <= 1
     assert font["hmtx"]["uni5927"][0] == 0
+    assert font["glyf"]["uni3007"].numberOfContours == 1  # 〇 前缀字形
 
 
 def test_mapping_json_written(built):
@@ -229,6 +233,19 @@ def test_os2_vertical_metrics_nonzero(built):
         os2 = TTFont(path)["OS/2"]
         assert os2.usWinAscent > 0 and os2.usWinDescent > 0
         assert os2.sTypoAscender > 0 and os2.sTypoDescender < 0
+
+
+def test_os2_declares_gb2312_codepage_for_word(built):
+    """Word 以 OS/2 码页位判定字体是否支持中文；缺 936 位会被替换成其他中文字体。
+
+    CJK Unicode range 位由 recalcUnicodeRanges 依 cmap 推导（汉字空白字形 + 〇），
+    码页位推不出（FontForge 启发式要求 cmap 含 ㄅ U+3105），必须显式声明。
+    """
+    for path in (built.ttf_path, built.otf_path):
+        os2 = TTFont(path)["OS/2"]
+        assert os2.ulCodePageRange1 & (1 << 18)  # 936 GB2312
+        assert os2.ulUnicodeRange2 & (1 << 16)   # CJK Symbols And Punctuation（〇 U+3007）
+        assert os2.ulUnicodeRange2 & (1 << 27)   # CJK Unified Ideographs
 
 
 def test_name_table_contains_unique_id(built):

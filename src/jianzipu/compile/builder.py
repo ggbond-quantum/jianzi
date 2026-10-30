@@ -66,6 +66,17 @@ def _to_font_units(x: float, y: float) -> tuple[float, float]:
     return (MARGIN * UPEM + x * s, MARGIN * UPEM + content - y * s)
 
 
+BLANK_MARKER_POINTS = ((0, 0), (1, 0), (0, 1))
+
+
+def _draw_blank_marker(pen) -> None:
+    """退化三角占位：Word 把完全空轮廓的 CJK 字形当作缺字并替换字体（ADR 0011）。"""
+    pen.moveTo(BLANK_MARKER_POINTS[0])
+    pen.lineTo(BLANK_MARKER_POINTS[1])
+    pen.lineTo(BLANK_MARKER_POINTS[2])
+    pen.closePath()
+
+
 def _draw_paths(pen, paths) -> None:
     for contour in normalize_contours(paths):
         first = contour[0].start
@@ -118,7 +129,7 @@ def _add_unique_id(font, name_table: dict) -> None:
 
 
 def _setup_os2(fb) -> None:
-    """写入健全的 OS/2：FontBuilder 默认垂直度量为 0，Windows 会因此拒装（HarfBuzz 不检查）。"""
+    """写入健全的 OS/2：垂直度量非零（Windows 拒装）并显式声明 936 码页位（Word 中文识别）。"""
     fb.setupOS2(
         sTypoAscender=TYPO_ASCENDER,
         sTypoDescender=TYPO_DESCENDER,
@@ -141,7 +152,12 @@ def _setup_os2(fb) -> None:
         sxHeight=500,
         sCapHeight=700,
     )
-    fb.font["OS/2"].recalcCodePageRanges(fb.font)
+    os2 = fb.font["OS/2"]
+    os2.recalcCodePageRanges(fb.font)
+    # Word 按码页位判定字体是否“支持中文”：recalcCodePageRanges 的 FontForge 启发式
+    # 要求 cmap 含 ㄅ（U+3105）才会置 936，本字体推不出，缺位时汉字 run 会被替换成
+    # 其他中文字体（只改西文字体槽位不够）。见 ADR 0010。
+    os2.ulCodePageRange1 |= 1 << 18  # 936 GB2312
 
 
 def build_font(db_path: Path, out_dir: Path, formats: tuple[str, ...] = ("ttf", "otf")) -> FontBuildResult:
@@ -234,11 +250,16 @@ def build_font(db_path: Path, out_dir: Path, formats: tuple[str, ...] = ("ttf", 
         "version": "Version 0.1",
     }
 
+    blank_glyphs = set(blank_names) | {PREFIX_GLYPH_NAME}
     ttf_path = otf_path = None
     if "ttf" in formats:
-        ttf_path = _build_ttf(out_dir, author, glyph_order, cmap, metrics, glyph_paths, fea_text, name_table)
+        ttf_path = _build_ttf(
+            out_dir, author, glyph_order, cmap, metrics, glyph_paths, blank_glyphs, fea_text, name_table
+        )
     if "otf" in formats:
-        otf_path = _build_otf(out_dir, author, glyph_order, cmap, metrics, glyph_paths, fea_text, name_table)
+        otf_path = _build_otf(
+            out_dir, author, glyph_order, cmap, metrics, glyph_paths, blank_glyphs, fea_text, name_table
+        )
 
     mapping_path = out_dir / f"char_to_unicode-{author}.json"
     mapping_path.write_text(
@@ -273,7 +294,9 @@ def build_font(db_path: Path, out_dir: Path, formats: tuple[str, ...] = ("ttf", 
     )
 
 
-def _build_ttf(out_dir, author, glyph_order, cmap, metrics, glyph_paths, fea_text, name_table) -> Path:
+def _build_ttf(
+    out_dir, author, glyph_order, cmap, metrics, glyph_paths, blank_glyphs, fea_text, name_table
+) -> Path:
     fb = FontBuilder(UPEM, isTTF=True)
     fb.setupGlyphOrder(glyph_order)
     fb.setupCharacterMap(cmap)
@@ -282,6 +305,8 @@ def _build_ttf(out_dir, author, glyph_order, cmap, metrics, glyph_paths, fea_tex
         pen = TTGlyphPen(None)
         if name in glyph_paths:
             _draw_paths(Cu2QuPen(pen, CU2QU_MAX_ERR), glyph_paths[name])
+        elif name in blank_glyphs:
+            _draw_blank_marker(pen)
         glyphs[name] = pen.glyph()
     fb.setupGlyf(glyphs)
     fb.setupHorizontalMetrics(metrics)
@@ -296,7 +321,9 @@ def _build_ttf(out_dir, author, glyph_order, cmap, metrics, glyph_paths, fea_tex
     return path
 
 
-def _build_otf(out_dir, author, glyph_order, cmap, metrics, glyph_paths, fea_text, name_table) -> Path:
+def _build_otf(
+    out_dir, author, glyph_order, cmap, metrics, glyph_paths, blank_glyphs, fea_text, name_table
+) -> Path:
     fb = FontBuilder(UPEM, isTTF=False)
     fb.setupGlyphOrder(glyph_order)
     fb.setupCharacterMap(cmap)
@@ -305,6 +332,8 @@ def _build_otf(out_dir, author, glyph_order, cmap, metrics, glyph_paths, fea_tex
         pen = T2CharStringPen(metrics[name][0], None)
         if name in glyph_paths:
             _draw_paths(pen, glyph_paths[name])
+        elif name in blank_glyphs:
+            _draw_blank_marker(pen)
         charstrings[name] = pen.getCharString()
     # CFF 字符串仅支持 latin-1，元数据用 ASCII；中文家族名保留在 name 表（Windows Unicode 记录）
     fb.setupCFF(
