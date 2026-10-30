@@ -18,6 +18,7 @@ The destination is a complete jianzi authoring experience: fonts that typeset no
 
 ## About Jianzipu（减字谱）
 
+Stay tuned...
 
 ## Jianzi Font File
 
